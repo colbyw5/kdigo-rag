@@ -1,0 +1,23 @@
+# pixi environments
+.pixi/*
+!.pixi/config.toml
+
+# secrets
+.env
+
+# personal dev log — not for the repo
+DECISIONS.md
+
+# source PDFs (not committed — see README for how to obtain)
+data/*.pdf
+
+# vector store persistence
+chroma_db/
+
+# notebooks checkpoints
+.ipynb_checkpoints/
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/

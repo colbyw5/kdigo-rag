@@ -1,0 +1,46 @@
+[project]
+authors = [{name = "Colby Wilkinson", email = "wilkinson.colby@gmail.com"}]
+dependencies = ["langgraph>=1.2.10,<2", "langchain>=1.3.14,<2", "langchain-anthropic>=1,<2", "langchain-voyageai>=0.4,<1","langchain-chroma>=1.1.0,<2", "chromadb>=1.5.9,<2", "pymupdf>=1.28.2,<2", "trustcall>=0.0.39,<0.0.40", "pydantic>=2.13.4,<3", "python-dotenv>=1.2.2,<2", "langgraph-cli[inmem]>=0.4.31,<0.5", "docling>=2,<3"]
+name = "kdigo-guideline-rag"
+requires-python = ">= 3.11"
+version = "0.1.0"
+
+[build-system]
+build-backend = "hatchling.build"
+requires = ["hatchling"]
+
+[tool.ruff]
+extend-exclude = [".pixi", "notebooks"]
+line-length = 110
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["osx-arm64"]
+
+[tool.pixi.pypi-dependencies]
+kdigo_guideline_rag = { path = ".", editable = true }
+
+[tool.pixi.tasks]
+test = "pytest"
+lint = "ruff check ."
+fmt = "ruff format ."
+ingest = { cmd = "python -m kdigo_guideline_rag.ingest", env = { TORCH_COMPILE_DISABLE = "1", PYTORCH_JIT = "0" } }
+
+[tool.pixi.dependencies]
+python = "3.11.*"
+
+[tool.pixi.feature.dev.dependencies]
+pytest = "*"
+ruff = "*"
+
+[tool.pixi.feature.docparse.dependencies]
+qpdf = "*"
+pikepdf = "*"
+tesseract = "*"
+
+[tool.pixi.feature.docparse.pypi-dependencies]
+unstructured = { version = "*", extras = ["pdf"] }
+
+[tool.pixi.environments]
+default = { features = ["dev"], solve-group = "default" }
+docparse = { features = ["docparse"], solve-group = "docparse" }

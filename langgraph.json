@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "ckd_guideline_rag": "./src/kdigo_guideline_rag/graph.py:graph"
+  },
+  "env": ".env"
+}
