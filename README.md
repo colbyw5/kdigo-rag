@@ -11,6 +11,7 @@ pixi install
 cp .env.example .env      # fill in ANTHROPIC_API_KEY, VOYAGE_API_KEY, etc.
 pixi run ingest            # chunk + embed guidelines into Chroma
 pixi run test               # run test suite
+pixi run explore            # interactive marimo notebook: ask questions, inspect retrieval/grading
 ```
 
 Source PDFs go in `data/` (gitignored, not committed):

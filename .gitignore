@@ -16,8 +16,9 @@ data/*.pdf
 # vector store persistence
 chroma_db/
 
-# notebooks checkpoints
+# notebooks checkpoints / marimo runtime session cache
 .ipynb_checkpoints/
+notebooks/__marimo__/
 
 __pycache__/
 *.pyc

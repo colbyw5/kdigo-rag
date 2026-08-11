@@ -30,6 +30,7 @@ test-integration = "pytest -m integration"
 lint = "ruff check ."
 fmt = "ruff format ."
 ingest = { cmd = "python -m kdigo_guideline_rag.ingest", env = { TORCH_COMPILE_DISABLE = "1", PYTORCH_JIT = "0" } }
+explore = "marimo edit notebooks/exploration.py"
 
 [tool.pixi.dependencies]
 python = "3.11.*"
@@ -49,3 +50,6 @@ unstructured = { version = "*", extras = ["pdf"] }
 [tool.pixi.environments]
 default = { features = ["dev"], solve-group = "default" }
 docparse = { features = ["docparse"], solve-group = "docparse" }
+
+[dependency-groups]
+dev = ["marimo>=0.23.16,<0.24"]
