@@ -13,6 +13,10 @@ requires = ["hatchling"]
 extend-exclude = [".pixi", "notebooks"]
 line-length = 110
 
+[tool.pytest.ini_options]
+markers = ["integration: requires live API keys and network access (Voyage/Anthropic); excluded by default"]
+addopts = "-m 'not integration'"
+
 [tool.pixi.workspace]
 channels = ["conda-forge"]
 platforms = ["osx-arm64"]
@@ -22,6 +26,7 @@ kdigo_guideline_rag = { path = ".", editable = true }
 
 [tool.pixi.tasks]
 test = "pytest"
+test-integration = "pytest -m integration"
 lint = "ruff check ."
 fmt = "ruff format ."
 ingest = { cmd = "python -m kdigo_guideline_rag.ingest", env = { TORCH_COMPILE_DISABLE = "1", PYTORCH_JIT = "0" } }
