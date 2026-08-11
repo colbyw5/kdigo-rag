@@ -63,6 +63,12 @@ Brief rationale for the non-default choices in this project; see git history / c
 - **AKI source is the 2026 public review draft**, not the 2012 final — chosen for current AKI+AKD scope; recommendations are unfinalized and may change before final publication.
 - **Claude Sonnet 5 + Voyage AI over OpenAI** — Anthropic has no first-party embeddings API, so embeddings needed a separate provider regardless. Chose Voyage AI (Anthropic's own recommended embeddings partner) over OpenAI or local embeddings: at this corpus's scale (~2M tokens for a full ingestion pass) Voyage's 200M-tokens/month free allowance makes it effectively free, with no quality tradeoff. For the LLM (grade/generate/rewrite), chose Sonnet 5 over Opus 5 — ~2.5x cheaper per query and sufficient quality for a context-constrained retrieve-then-generate task, not open-ended reasoning.
 
+## Known limitations
+
+- **Numeric range/classification questions are unreliable** (e.g. "what eGFR stage is 38 mL/min/1.73m²?"). Semantic embeddings don't do numeric interval reasoning — "38" has no learned relationship to a table row labeled "30-44" — so retrieval can miss the correct staging table even when it's cleanly indexed. A deterministic lookup (extracting KDIGO's GFR/albuminuria category tables at ingest time) would fix this specific case, but was deliberately descoped: it's a document-specific special case that cuts against this project's generic, config-driven architecture (see Design notes), and duplicates functionality (an eGFR calculator) that's out of scope for a RAG system to reimplement. Flagging the boundary rather than building around it. Notably, the closest published prior art (Miao et al., below) doesn't address this class of problem either — it's an open gap in RAG-over-guidelines generally, not a shortfall specific to this implementation.
+- Reference/bibliography text sometimes gets embedded as narrative chunks and can crowd out real content in retrieval results (observed on an IgA nephropathy query).
+- No hybrid search (BM25 + vector) yet — not enough evidence from a small eval set to justify the added complexity over pure vector retrieval.
+
 ## References
 
 - Miao J, Thongprayoon C, Suppadungsuk S, Garcia Valencia OA, Cheungpasitporn W. [Integrating Retrieval-Augmented Generation with Large Language Models in Nephrology: Advancing Practical Applications](https://pmc.ncbi.nlm.nih.gov/articles/PMC10972059/). Explores RAG + LLMs for nephrology using KDIGO guidelines as the reference base — related prior work motivating this project's approach.
