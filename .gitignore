@@ -5,8 +5,9 @@
 # secrets
 .env
 
-# personal dev log — not for the repo
+# personal dev log and agent reference — not for the repo
 DECISIONS.md
+agent.md
 
 # source PDFs (not committed — see README for how to obtain)
 data/*.pdf
@@ -21,3 +22,8 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .ruff_cache/
+
+# local Claude Code session artifacts -- not project content
+.claude/bash_history.log
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
