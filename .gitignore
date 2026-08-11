@@ -5,9 +5,10 @@
 # secrets
 .env
 
-# personal dev log and agent reference — not for the repo
+# personal dev log, agent reference, and original planning doc — not for the repo
 DECISIONS.md
 agent.md
+CLAUDE_ckd_guidelines_rag.md
 
 # source PDFs (not committed — see README for how to obtain)
 data/*.pdf
