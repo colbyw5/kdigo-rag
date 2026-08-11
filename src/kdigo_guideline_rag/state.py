@@ -15,6 +15,9 @@ class GraphState(TypedDict):
         graded_documents: Documents that passed the relevance grading step.
         rewrite_count: Number of times the query has been rewritten, capped at 1.
         answer: The final synthesized, cited answer.
+        user_context: Known facts about the user (role, expertise level,
+            recurring interests) recalled from memory, formatted for the
+            generate prompt.
     """
 
     question: str
@@ -23,3 +26,4 @@ class GraphState(TypedDict):
     graded_documents: list[Document]
     rewrite_count: int
     answer: str
+    user_context: str
