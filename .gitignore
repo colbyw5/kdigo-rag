@@ -29,3 +29,6 @@ __pycache__/
 .claude/bash_history.log
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
+
+# local Serena MCP tool config -- not project content
+.serena/
