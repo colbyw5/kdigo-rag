@@ -217,3 +217,79 @@ def test_kdigo_recommendation_pattern_generalizes_across_docs(text, expected):
 )
 def test_numbered_heading_pattern(text, should_match):
     assert (NUMBERED_HEADING_PATTERN.fullmatch(text) is not None) == should_match
+
+
+def test_references_section_dropped_via_heading(source):
+    """A detected References/Bibliography heading drops everything under it
+    -- citation entries, tables -- until the next real heading.
+    """
+    doc = _FakeDoc(
+        [
+            (_item("section_header", "Chapter 1: Evaluation"), 1),
+            (_item("text", "Practice Point 1.1.1: Test people at risk."), 1),
+            (_item("section_header", "References"), 5),
+            (_item("list_item", "1. Smith J, Doe K. A study of CKD. Nephrol. 2020;35(4):567-578."), 5),
+            (_FakeTable("| A | B |\n|---|---|\n| 1 | 2 |", page=5), 5),
+            (_item("section_header", "Chapter 2: Management"), 6),
+            (_item("text", "Practice Point 2.1.1: Manage patients."), 6),
+        ]
+    )
+    chunks = chunk_document(doc, source)
+
+    assert [c.recommendation_number for c in chunks] == ["1.1.1", "2.1.1"]
+    assert all("Smith" not in c.text for c in chunks)
+    assert chunks[1].chapter == "Chapter 2: Management"
+
+
+@pytest.mark.parametrize(
+    "heading",
+    ["References", "REFERENCES", "Bibliography", "12. References", "Works Cited", "Reference List"],
+)
+def test_reference_heading_pattern_generalizes(heading, source):
+    from kdigo_guideline_rag.ingest.sources import REFERENCE_HEADING_PATTERN
+
+    assert REFERENCE_HEADING_PATTERN.match(heading) is not None
+
+
+def test_reference_heading_via_mistagged_list_item(source):
+    """A "References" heading Docling mistags as list_item/text (not
+    section_header, same failure mode as numbered subsections) must still
+    open reference-skip mode, not get misread as content or a heading.
+    """
+    doc = _FakeDoc(
+        [
+            (_item("section_header", "Chapter 1: Evaluation"), 1),
+            (_item("list_item", "References"), 5),
+            (_item("list_item", "1. Smith J, Doe K. A study. Nephrol. 2020;35(4):567-578."), 5),
+        ]
+    )
+    chunks = chunk_document(doc, source)
+
+    assert chunks == []
+
+
+def test_citation_dense_narrative_dropped_without_heading(source):
+    """Fallback: citation-list text with no detected heading (e.g. Docling
+    never emitted a References item at all) is still dropped, based on
+    citation-entry density rather than any heading match.
+    """
+    citation_text = (
+        "Smith J, Doe K. A study of CKD. Nephrol. 2020;35(4):567-578. "
+        "Lee A, Park B. Outcomes in AKI. Kidney Int. 2019;96(2):210-220."
+    )
+    doc = _FakeDoc([(_item("text", citation_text), 5)])
+    chunks = chunk_document(doc, source)
+
+    assert chunks == []
+
+
+def test_single_inline_citation_not_treated_as_reference_list(source):
+    """One citation-shaped fragment inside real narrative prose isn't
+    enough to trigger the density fallback -- avoids false positives on
+    genuine discussion text that happens to cite one study inline.
+    """
+    text = "Discussion of eGFR trends references one key study (Lee A. Kidney Int. 2019;96(2):210-220.) directly."
+    doc = _FakeDoc([(_item("text", text), 1)])
+    chunks = chunk_document(doc, source)
+
+    assert len(chunks) == 1

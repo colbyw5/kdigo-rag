@@ -27,8 +27,17 @@ KDIGO_RECOMMENDATION_PATTERN = re.compile(
 # instead of section_header -- observed in *every* KDIGO doc so far (e.g.
 # AKI's "1.4. AKI and AKD resolution", CKD's "1.1 Detection and evaluation
 # of CKD"), so this is a default, not a per-document opt-in.
-NUMBERED_HEADING_PATTERN = re.compile(
-    r"^(?P<number>\d+(?:\.\d+)*)\.?\s+(?P<title>[A-Z][^\n]*)$"
+NUMBERED_HEADING_PATTERN = re.compile(r"^(?P<number>\d+(?:\.\d+)*)\.?\s+(?P<title>[A-Z][^\n]*)$")
+
+# Matches a "References"/"Bibliography"-type section heading, optionally
+# prefixed by chapter/section numbering (e.g. "12. References"). Generic
+# vocabulary shared by essentially all clinical guideline and academic
+# documents -- not tied to KDIGO's formatting -- so this is a default for
+# every source, not a per-document opt-in.
+REFERENCE_HEADING_PATTERN = re.compile(
+    r"^(?:\d+(?:\.\d+)*\.?\s+)?"
+    r"(references?|bibliography|works\s+cited|literature\s+cited|reference\s+list)\s*:?\s*$",
+    re.IGNORECASE,
 )
 
 
@@ -45,6 +54,10 @@ class GuidelineSource:
         heading_fallback_pattern: Regex for numbered subsections that Docling
             tags as plain text/list items instead of section headers. Defaults
             to :data:`NUMBERED_HEADING_PATTERN`; set ``None`` to disable.
+        reference_heading_pattern: Regex identifying a references/bibliography
+            section heading; content between it and the next real heading is
+            dropped rather than chunked. Defaults to
+            :data:`REFERENCE_HEADING_PATTERN`; set ``None`` to disable.
         noise_patterns: Strings/regexes to strip from extracted text before
             chunking (e.g. watermarks like "DRAFT" bleeding into the text).
         narrative_chunk_size: Target token count for fixed-window chunks used
@@ -56,6 +69,7 @@ class GuidelineSource:
     pdf_path: Path
     recommendation_pattern: re.Pattern | None = KDIGO_RECOMMENDATION_PATTERN
     heading_fallback_pattern: re.Pattern | None = NUMBERED_HEADING_PATTERN
+    reference_heading_pattern: re.Pattern | None = REFERENCE_HEADING_PATTERN
     noise_patterns: list[re.Pattern] = field(default_factory=list)
     narrative_chunk_size: int = 500
     narrative_chunk_overlap: int = 50
@@ -68,14 +82,12 @@ KDIGO_SOURCES: list[GuidelineSource] = [
     ),
     GuidelineSource(
         name="KDIGO 2026 AKI/AKD (Public Review Draft)",
-        pdf_path=DATA_DIR
-        / "KDIGO-2026-AKI-AKD-Guideline-Public-Review-Draft-March-2026.pdf",
+        pdf_path=DATA_DIR / "KDIGO-2026-AKI-AKD-Guideline-Public-Review-Draft-March-2026.pdf",
         noise_patterns=[re.compile(r"\bDRAFT\b")],
     ),
     GuidelineSource(
         name="KDIGO 2021 Glomerular Diseases",
-        pdf_path=DATA_DIR
-        / "KDIGO-2021-Glomerular-Diseases-Guideline_English_LN-2024-Update.pdf",
+        pdf_path=DATA_DIR / "KDIGO-2021-Glomerular-Diseases-Guideline_English_LN-2024-Update.pdf",
     ),
     GuidelineSource(
         name="KDIGO 2021 Blood Pressure in CKD",

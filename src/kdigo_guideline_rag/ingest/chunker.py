@@ -20,6 +20,19 @@ GRADE_PATTERN = re.compile(r"\((\d[A-D]|Not Graded)\)", re.IGNORECASE)
 CHAPTER_PATTERN = re.compile(r"^CHAPTER\s+", re.IGNORECASE)
 CAPTION_ONLY_PATTERN = re.compile(r"^(Figure|Table)\s+\d+\s*\|", re.IGNORECASE)
 
+# Structural shape of a Vancouver-style biomedical citation entry (the
+# convention KDIGO and most clinical guidelines use): "...Year;Vol(Issue):
+# Pages" or a doi/PMID. Narrative prose only rarely contains even one of
+# these; a reference-list entry contains one *per citation*. Used as a
+# density fallback for reference-list text that isn't caught by a detected
+# "References" heading (e.g. Docling missed/mislabeled the heading) --
+# generic to citation formatting, not to any single guideline's wording.
+CITATION_ENTRY_PATTERN = re.compile(
+    r"(?:19|20)\d{2}\s*;\s*\d+(?:\(\d+\))?\s*:\s*\d+" r"|\bdoi:\s*10\.\d{4,9}/\S+" r"|\bPMID:\s*\d+",
+    re.IGNORECASE,
+)
+REFERENCE_DENSITY_THRESHOLD = 2
+
 
 @dataclass
 class Chunk:
@@ -68,6 +81,17 @@ def _update_heading(text: str, chapter: str | None, section: str | None) -> tupl
     return chapter, text
 
 
+def _looks_like_reference_list(text: str) -> bool:
+    """Density-based fallback: is this narrative window citation-list text?
+
+    Real narrative prose almost never contains two or more Vancouver-style
+    citation endings in one window; a reference-list entry has one per
+    citation. Only applied to text with no recommendation anchor -- a real
+    recommendation statement never has this shape.
+    """
+    return len(CITATION_ENTRY_PATTERN.findall(text)) >= REFERENCE_DENSITY_THRESHOLD
+
+
 def _dedupe_recommendations(chunks: list[Chunk]) -> list[Chunk]:
     """Drop repeat occurrences of the same recommendation/practice point.
 
@@ -103,11 +127,14 @@ def chunk_document(doc: DoclingDocument, source: GuidelineSource) -> list[Chunk]
     chunks: list[Chunk] = []
     chapter: str | None = None
     section: str | None = None
+    in_references = False
 
     for item, _level in doc.iterate_items():
         label = getattr(item, "label", None)
 
         if label == "table":
+            if in_references:
+                continue
             table_md = item.export_to_markdown(doc).strip()
             if table_md:
                 prov = getattr(item, "prov", None)
@@ -137,14 +164,27 @@ def chunk_document(doc: DoclingDocument, source: GuidelineSource) -> list[Chunk]
             # item already carries it) so it's dropped outright.
             if CAPTION_ONLY_PATTERN.match(stripped):
                 continue
+            # A "References"/"Bibliography" heading opens a run of citation
+            # entries to drop wholesale, until the next real heading.
+            if source.reference_heading_pattern and source.reference_heading_pattern.match(stripped):
+                in_references = True
+                continue
             is_mislabeled_recommendation = (
                 source.recommendation_pattern and source.recommendation_pattern.search(stripped)
             )
             if not is_mislabeled_recommendation:
                 chapter, section = _update_heading(stripped, chapter, section)
+                in_references = False
                 continue
+            in_references = False
 
         if label not in ("text", "list_item", "section_header"):
+            continue
+
+        # Skip citation entries outright -- checked before the numbered-
+        # heading fallback below, since a numbered reference ("1. Smith J,
+        # et al...") would otherwise be misread as a section heading.
+        if in_references:
             continue
 
         text = _strip_noise(text, source)
@@ -155,6 +195,10 @@ def chunk_document(doc: DoclingDocument, source: GuidelineSource) -> list[Chunk]
         # text/list_item instead of section_header (varies by document).
         if source.heading_fallback_pattern and source.heading_fallback_pattern.fullmatch(text):
             chapter, section = _update_heading(text, chapter, section)
+            continue
+
+        if source.reference_heading_pattern and source.reference_heading_pattern.match(text):
+            in_references = True
             continue
 
         # Bare figure/table caption lines carry no standalone information.
@@ -169,6 +213,8 @@ def chunk_document(doc: DoclingDocument, source: GuidelineSource) -> list[Chunk]
 
         if not matches:
             for piece in _split_narrative(text, source):
+                if _looks_like_reference_list(piece):
+                    continue
                 chunks.append(
                     Chunk(
                         text=piece,
