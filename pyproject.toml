@@ -31,6 +31,7 @@ lint = "ruff check ."
 fmt = "ruff format ."
 ingest = { cmd = "python -m kdigo_guideline_rag.ingest", env = { TORCH_COMPILE_DISABLE = "1", PYTORCH_JIT = "0" } }
 explore = "marimo edit notebooks/exploration.py"
+eval = "python -m kdigo_guideline_rag.eval"
 
 [tool.pixi.dependencies]
 python = "3.11.*"
