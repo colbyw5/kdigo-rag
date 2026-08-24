@@ -1,5 +1,6 @@
 """Graph node functions: retrieve, grade, generate, rewrite."""
 
+import logging
 from functools import lru_cache
 
 from langchain_anthropic import ChatAnthropic
@@ -18,6 +19,8 @@ from kdigo_guideline_rag.prompts import (
     REWRITE_USER_PROMPT,
 )
 from kdigo_guideline_rag.state import GraphState
+
+logger = logging.getLogger(__name__)
 
 MODEL = "claude-sonnet-5"
 TOP_K = 5
@@ -64,7 +67,17 @@ def retrieve(state: GraphState, config: RunnableConfig) -> dict:
 
 
 def grade(state: GraphState) -> dict:
-    """LLM-grade each retrieved chunk for relevance to the question, independently."""
+    """LLM-grade each retrieved chunk for relevance to the question, independently.
+
+    Each chunk is graded in isolation (``return_exceptions=True``): Claude
+    occasionally returns a malformed tool call for one chunk in a batch (the
+    whole JSON payload nested as a string inside a single field instead of
+    proper top-level args), which would otherwise raise a pydantic
+    ``ValidationError`` and crash the entire graph run over one bad chunk.
+    A chunk that fails to grade is treated as not relevant rather than
+    retried -- conservative, and consistent with how a chunk that's
+    genuinely irrelevant is already handled.
+    """
     grader = get_llm().with_structured_output(GradeResult)
     inputs = [
         [
@@ -73,8 +86,17 @@ def grade(state: GraphState) -> dict:
         ]
         for doc in state["documents"]
     ]
-    results: list[GradeResult] = grader.batch(inputs) if inputs else []
-    relevant = [doc for doc, result in zip(state["documents"], results, strict=True) if result.relevant]
+    if not inputs:
+        return {"graded_documents": []}
+
+    results = grader.batch(inputs, return_exceptions=True)
+    relevant = []
+    for doc, result in zip(state["documents"], results, strict=True):
+        if isinstance(result, Exception):
+            logger.warning("Grading failed for a retrieved chunk, treating as not relevant: %r", result)
+            continue
+        if result.relevant:
+            relevant.append(doc)
     return {"graded_documents": relevant}
 
 
