@@ -7,10 +7,20 @@ by the active :class:`~kdigo_guideline_rag.ingest.sources.GuidelineSource`.
 Text with no recommendation anchor becomes a narrative chunk instead. Each
 ``table`` item becomes its own chunk (markdown table + resolved caption, via
 Docling's own rendering). Pictures are skipped -- no text content to index.
+
+Three stages: **extract** one segment per Docling item (or per
+recommendation within an item), **dedupe** (recommendations: exact by
+number; tables: exact text; narrative: exact + near-duplicate text), then
+**pack** narrative segments within a section -- by default absorbing only
+short fragments into a neighbor (see ``GuidelineSource.narrative_packing``).
+Packing runs last because a duplicated paragraph packed alongside two
+different sets of neighbors no longer looks like a duplicate.
 """
 
+import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from difflib import SequenceMatcher
 
 from docling_core.types.doc.document import DoclingDocument
 
@@ -32,6 +42,12 @@ CITATION_ENTRY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 REFERENCE_DENSITY_THRESHOLD = 2
+
+# ASCII control characters (except tab/newline) left over after any
+# source-specific glyph fixes -- never meaningful in guideline text.
+CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -59,6 +75,16 @@ class Chunk:
     recommendation_number: str | None = None
     grade: str | None = None
     page: int | None = None
+
+
+def _fix_chars(text: str, source: GuidelineSource) -> str:
+    """Apply the source's glyph fixes, then drop any remaining control characters.
+
+    Whitespace is left alone so table markdown keeps its line structure.
+    """
+    if source.char_replacements:
+        text = text.translate(str.maketrans(source.char_replacements))
+    return CONTROL_CHAR_PATTERN.sub("", text)
 
 
 def _strip_noise(text: str, source: GuidelineSource) -> str:
@@ -114,6 +140,207 @@ def _dedupe_recommendations(chunks: list[Chunk]) -> list[Chunk]:
     return deduped
 
 
+def _dedupe_tables(chunks: list[Chunk]) -> tuple[list[Chunk], int]:
+    """Drop exact repeats of a table (normalized text), keeping the first.
+
+    Guidelines re-render the same figure/table in later chapters that refer
+    back to it (e.g. Glomerular Diseases' Figure 8 appears in both the
+    general chapter and a disease chapter, differing by one space). The
+    first occurrence is the canonical, defining location.
+    """
+    seen: set[str] = set()
+    kept: list[Chunk] = []
+    for chunk in chunks:
+        if chunk.label_type == "Table":
+            key = _narrative_key(chunk.text)
+            if key in seen:
+                continue
+            seen.add(key)
+        kept.append(chunk)
+    return kept, len(chunks) - len(kept)
+
+
+def _narrative_key(text: str) -> str:
+    """Aggressive normalization for exact-duplicate detection: lowercase alphanumerics only."""
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def _is_near_duplicate(words: list[str], candidates: list[list[str]], threshold: float) -> bool:
+    """Whether ``words`` matches any candidate at word-sequence similarity >= ``threshold``.
+
+    Cheap upper bounds (length ratio, then ``quick_ratio``) prune almost
+    every pair before the full ``ratio`` computation runs.
+    """
+    for other in candidates:
+        if 2 * min(len(words), len(other)) / (len(words) + len(other)) < threshold:
+            continue
+        matcher = SequenceMatcher(None, words, other, autojunk=False)
+        if matcher.quick_ratio() >= threshold and matcher.ratio() >= threshold:
+            return True
+    return False
+
+
+def _dedupe_narrative(chunks: list[Chunk], source: GuidelineSource) -> tuple[list[Chunk], int]:
+    """Drop narrative segments that repeat a later segment, exactly or nearly.
+
+    KDIGO restates narrative text (summary boxes, figure text) the same way it
+    restates recommendations, sometimes with a word or two edited -- e.g. "are
+    present" vs. "is" in an otherwise identical 88-word paragraph. Unlike
+    :func:`_dedupe_recommendations`, the *last* occurrence is kept: the
+    chapter-body copy, which gets packed alongside its own rationale rather
+    than alongside unrelated summary bullets.
+
+    Clinically distinct but similar text (e.g. two SGLT2i recommendations
+    with different populations scored ~0.6; two evidence tables differing by
+    "with/without diabetes" ~0.84) stays below the default 0.95 threshold.
+    Segments with no alphanumeric content at all (e.g. a lone "-") are dropped.
+
+    Returns:
+        The kept chunks in reading order, and the number dropped.
+    """
+    seen_keys: set[str] = set()
+    seen_words: list[list[str]] = []
+    kept_reversed: list[Chunk] = []
+    for chunk in reversed(chunks):
+        if chunk.label_type is not None:
+            kept_reversed.append(chunk)
+            continue
+        key = _narrative_key(chunk.text)
+        if not key or key in seen_keys:
+            continue
+        words = re.findall(r"[a-z0-9]+", chunk.text.lower())
+        long_enough = len(words) >= source.near_duplicate_min_words
+        if long_enough and _is_near_duplicate(words, seen_words, source.near_duplicate_threshold):
+            continue
+        seen_keys.add(key)
+        if long_enough:
+            seen_words.append(words)
+        kept_reversed.append(chunk)
+    return kept_reversed[::-1], len(chunks) - len(kept_reversed)
+
+
+def _absorb_fragments(chunks: list[Chunk], source: GuidelineSource) -> list[Chunk]:
+    """Attach short narrative fragments to a neighbor; leave substantive segments alone.
+
+    Docling emits one item per paragraph, bullet, or stray table-header cell,
+    so many narrative segments are a few words long ("Outcomes", "the
+    rate"). Segments of at least ``narrative_standalone_words`` keep their
+    own chunk -- a self-contained bullet like "CKD G4 and G5: ... less
+    certainty around the benefit of a lower BP target" must stay precisely
+    embedded, not diluted inside a window about something else.
+
+    Within a run of narrative segments sharing chapter/section (a run ends at
+    any recommendation/practice point/table), fragments accumulate and are
+    prepended to the next standalone segment -- a short lead-in usually
+    introduces what follows. Fragments left at the end of a run are appended
+    to the run's last standalone chunk. If the accumulated fragments reach
+    the standalone size themselves, they become their own chunk; no merge
+    may exceed ``narrative_chunk_size``.
+    """
+    out: list[Chunk] = []
+    pending: list[Chunk] = []
+    last_standalone_idx: int | None = None  # index into ``out``, within the current run
+
+    def words(text: str) -> int:
+        return len(text.split())
+
+    def pending_text() -> str:
+        return " ".join(c.text for c in pending)
+
+    def end_run() -> None:
+        nonlocal last_standalone_idx
+        if pending:
+            tail = pending_text()
+            prev = out[last_standalone_idx] if last_standalone_idx is not None else None
+            if prev is not None and words(prev.text) + words(tail) <= source.narrative_chunk_size:
+                out[last_standalone_idx] = replace(prev, text=f"{prev.text} {tail}")
+            else:
+                out.append(replace(pending[0], text=tail))
+            pending.clear()
+        last_standalone_idx = None
+
+    for chunk in chunks:
+        if chunk.label_type is not None:
+            end_run()
+            out.append(chunk)
+            continue
+        if pending and (chunk.chapter, chunk.section) != (pending[0].chapter, pending[0].section):
+            end_run()
+        elif last_standalone_idx is not None:
+            prev = out[last_standalone_idx]
+            if (chunk.chapter, chunk.section) != (prev.chapter, prev.section):
+                end_run()
+
+        if words(chunk.text) < source.narrative_standalone_words:
+            pending.append(chunk)
+            if words(pending_text()) >= source.narrative_standalone_words:
+                out.append(replace(pending[0], text=pending_text()))
+                pending.clear()
+                last_standalone_idx = len(out) - 1
+            continue
+
+        if pending and words(pending_text()) + words(chunk.text) <= source.narrative_chunk_size:
+            out.append(replace(pending[0], text=f"{pending_text()} {chunk.text}"))
+        else:
+            if pending:
+                out.append(replace(pending[0], text=pending_text()))
+            out.append(chunk)
+        pending.clear()
+        last_standalone_idx = len(out) - 1
+    end_run()
+    return out
+
+
+def _pack_narrative(chunks: list[Chunk], source: GuidelineSource) -> list[Chunk]:
+    """Pack consecutive narrative segments in the same chapter/section into windows.
+
+    Docling emits one item per paragraph, bullet, or stray table-header cell,
+    so unpacked narrative chunks are often a few words long ("Outcomes",
+    "the rate"). A window closes when adding the next segment would pass
+    ``narrative_target_words``, when chapter/section changes, or when a
+    recommendation/practice point/table intervenes -- so a window never
+    spans two citation contexts. A window that closes under
+    ``narrative_min_words`` is folded into the preceding window of the same
+    section when the result stays within ``narrative_chunk_size``.
+    """
+    packed: list[Chunk] = []
+    buffer: list[Chunk] = []
+
+    def word_count(text: str) -> int:
+        return len(text.split())
+
+    def flush() -> None:
+        if not buffer:
+            return
+        window = replace(buffer[0], text=" ".join(c.text for c in buffer))
+        buffer.clear()
+        prev = packed[-1] if packed else None
+        if (
+            word_count(window.text) < source.narrative_min_words
+            and prev is not None
+            and prev.label_type is None
+            and (prev.chapter, prev.section) == (window.chapter, window.section)
+            and word_count(prev.text) + word_count(window.text) <= source.narrative_chunk_size
+        ):
+            packed[-1] = replace(prev, text=f"{prev.text} {window.text}")
+            return
+        packed.append(window)
+
+    for chunk in chunks:
+        if chunk.label_type is not None:
+            flush()
+            packed.append(chunk)
+            continue
+        if buffer:
+            same_context = (chunk.chapter, chunk.section) == (buffer[0].chapter, buffer[0].section)
+            buffered_words = sum(word_count(c.text) for c in buffer)
+            if not same_context or buffered_words + word_count(chunk.text) > source.narrative_target_words:
+                flush()
+        buffer.append(chunk)
+    flush()
+    return packed
+
+
 def chunk_document(doc: DoclingDocument, source: GuidelineSource) -> list[Chunk]:
     """Chunk a parsed Docling document per ``source``'s configuration.
 
@@ -122,7 +349,31 @@ def chunk_document(doc: DoclingDocument, source: GuidelineSource) -> list[Chunk]
         source: Guideline-specific chunking configuration.
 
     Returns:
-        Recommendation-anchored and narrative chunks, in reading order.
+        Recommendation-anchored, table, and packed narrative chunks, in
+        reading order.
+    """
+    segments = _dedupe_recommendations(_extract_segments(doc, source))
+    segments, tables_dropped = _dedupe_tables(segments)
+    narrative_before = sum(c.label_type is None for c in segments)
+    segments, dropped = _dedupe_narrative(segments, source)
+    pack = _absorb_fragments if source.narrative_packing == "absorb" else _pack_narrative
+    chunks = pack(segments, source)
+    logger.info(
+        "%s: dropped %d duplicate tables and %d/%d narrative segments as exact/near duplicates; "
+        "%s packing -> %d narrative chunks",
+        source.name,
+        tables_dropped,
+        dropped,
+        narrative_before,
+        source.narrative_packing,
+        sum(c.label_type is None for c in chunks),
+    )
+    return chunks
+
+
+def _extract_segments(doc: DoclingDocument, source: GuidelineSource) -> list[Chunk]:
+    """Walk Docling items in reading order, emitting one segment per
+    recommendation anchor, table, or narrative item (before dedupe/packing).
     """
     chunks: list[Chunk] = []
     chapter: str | None = None
@@ -135,7 +386,7 @@ def chunk_document(doc: DoclingDocument, source: GuidelineSource) -> list[Chunk]
         if label == "table":
             if in_references:
                 continue
-            table_md = item.export_to_markdown(doc).strip()
+            table_md = _fix_chars(item.export_to_markdown(doc), source).strip()
             if table_md:
                 prov = getattr(item, "prov", None)
                 chunks.append(
@@ -153,6 +404,7 @@ def chunk_document(doc: DoclingDocument, source: GuidelineSource) -> list[Chunk]
         text = getattr(item, "text", None)
         if not text:
             continue
+        text = _fix_chars(text, source)
 
         if label == "section_header":
             stripped = text.strip()
@@ -256,4 +508,4 @@ def chunk_document(doc: DoclingDocument, source: GuidelineSource) -> list[Chunk]
                 )
             )
 
-    return _dedupe_recommendations(chunks)
+    return chunks

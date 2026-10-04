@@ -12,6 +12,7 @@ fails to emit real markdown headings) can be onboarded by adding a new
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 
@@ -40,6 +41,23 @@ REFERENCE_HEADING_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Symbol-font glyphs that Docling decodes to the wrong code points in PDFs
+# typeset by Kidney International (KDIGO's journal) -- confirmed by context
+# across the CKD, Glomerular and BP guidelines ("ACR ‡ 30 mg/g" for >= 30,
+# "target ( £ 120 mm Hg)" for <= 120, "n ¼ 2646" for n = 2646); absent from
+# the differently typeset AKI draft. A property of one publisher's font
+# encoding, not of PDFs in general ("¼" really is one-quarter elsewhere), so
+# it's opt-in per source rather than a global default.
+KI_SYMBOL_FONT_MAP = {
+    "\x0f": "•",
+    "‡": "≥",  # occasionally a genuine footnote dagger instead; rare, and harmless vs. garbling every >=
+    "£": "≤",
+    "\x00": "−",
+    "\x06": "±",
+    "\x0e": "°",
+    "¼": "=",
+}
+
 
 @dataclass
 class GuidelineSource:
@@ -60,9 +78,31 @@ class GuidelineSource:
             :data:`REFERENCE_HEADING_PATTERN`; set ``None`` to disable.
         noise_patterns: Strings/regexes to strip from extracted text before
             chunking (e.g. watermarks like "DRAFT" bleeding into the text).
-        narrative_chunk_size: Target token count for fixed-window chunks used
-            on narrative text with no recommendation anchor.
-        narrative_chunk_overlap: Overlap (tokens) between narrative chunks.
+        char_replacements: Single-character fixes applied to all extracted
+            text (headings, narrative, tables) before anything else -- for
+            mis-decoded font glyphs, e.g. :data:`KI_SYMBOL_FONT_MAP`.
+        narrative_chunk_size: Hard upper bound (words) for one narrative
+            item; longer items are split into overlapping windows.
+        narrative_chunk_overlap: Overlap (words) between those split windows.
+        narrative_packing: How narrative segments are combined into chunks.
+            ``"absorb"`` (default): segments of at least
+            ``narrative_standalone_words`` stay their own chunk; only shorter
+            fragments are attached to a neighbor -- keeps self-contained
+            bullets/paragraphs precisely embedded. ``"greedy"``: pack every
+            consecutive segment into windows of up to
+            ``narrative_target_words`` -- more context per chunk, but dilutes
+            short standalone passages (measured: see DECISIONS.md).
+        narrative_standalone_words: ``"absorb"`` mode -- minimum words for a
+            segment to stand alone as its own chunk.
+        narrative_target_words: ``"greedy"`` mode -- window size in words.
+        narrative_min_words: ``"greedy"`` mode -- a window shorter than this
+            at a section boundary is merged into the preceding window of the
+            same section (if the result stays within ``narrative_chunk_size``).
+        near_duplicate_threshold: Word-sequence similarity at or above which
+            a narrative item counts as a near-duplicate of a later one.
+        near_duplicate_min_words: Items shorter than this are only deduped on
+            exact (normalized) match -- similarity scores are unstable on
+            very short text.
     """
 
     name: str
@@ -71,14 +111,22 @@ class GuidelineSource:
     heading_fallback_pattern: re.Pattern | None = NUMBERED_HEADING_PATTERN
     reference_heading_pattern: re.Pattern | None = REFERENCE_HEADING_PATTERN
     noise_patterns: list[re.Pattern] = field(default_factory=list)
+    char_replacements: dict[str, str] = field(default_factory=dict)
     narrative_chunk_size: int = 500
     narrative_chunk_overlap: int = 50
+    narrative_packing: Literal["absorb", "greedy"] = "absorb"
+    narrative_standalone_words: int = 30
+    narrative_target_words: int = 250
+    narrative_min_words: int = 50
+    near_duplicate_threshold: float = 0.95
+    near_duplicate_min_words: int = 15
 
 
 KDIGO_SOURCES: list[GuidelineSource] = [
     GuidelineSource(
         name="KDIGO 2024 CKD Evaluation and Management",
         pdf_path=DATA_DIR / "KDIGO-2024-CKD-Guideline.pdf",
+        char_replacements=KI_SYMBOL_FONT_MAP,
     ),
     GuidelineSource(
         name="KDIGO 2026 AKI/AKD (Public Review Draft)",
@@ -88,9 +136,11 @@ KDIGO_SOURCES: list[GuidelineSource] = [
     GuidelineSource(
         name="KDIGO 2021 Glomerular Diseases",
         pdf_path=DATA_DIR / "KDIGO-2021-Glomerular-Diseases-Guideline_English_LN-2024-Update.pdf",
+        char_replacements=KI_SYMBOL_FONT_MAP,
     ),
     GuidelineSource(
         name="KDIGO 2021 Blood Pressure in CKD",
         pdf_path=DATA_DIR / "KDIGO-2021-Blood-Pressure-in-CKD-Guideline.pdf",
+        char_replacements=KI_SYMBOL_FONT_MAP,
     ),
 ]

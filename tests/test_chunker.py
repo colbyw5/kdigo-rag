@@ -293,3 +293,278 @@ def test_single_inline_citation_not_treated_as_reference_list(source):
     chunks = chunk_document(doc, source)
 
     assert len(chunks) == 1
+
+
+def _words(n: int, word: str = "word") -> str:
+    return " ".join(f"{word}{i}" for i in range(n))
+
+
+def test_ki_symbol_font_glyphs_fixed_in_text_and_tables():
+    """Kidney International's symbol font decodes as wrong glyphs (>= as a
+    double dagger, <= as a pound sign, bullets as \\x0f). Clinical thresholds
+    must reach the index intact, in prose and tables alike.
+    """
+    from kdigo_guideline_rag.ingest.sources import KI_SYMBOL_FONT_MAP
+
+    ki_source = GuidelineSource(name="KI", pdf_path="unused.pdf", char_replacements=KI_SYMBOL_FONT_MAP)
+    doc = _FakeDoc(
+        [
+            (_item("text", "\x0f Confirm ACR ‡ 30 mg/g with SBP target £ 120 mm Hg (n ¼ 2646)."), 1),
+            (_FakeTable("| eGFR |\n|---|\n| 47.9 \x06 9.5 |"), 1),
+        ]
+    )
+    narrative, table = chunk_document(doc, ki_source)
+
+    assert narrative.text == "• Confirm ACR ≥ 30 mg/g with SBP target ≤ 120 mm Hg (n = 2646)."
+    assert "47.9 ± 9.5" in table.text
+    assert "\n" in table.text  # markdown line structure preserved
+
+
+def test_control_chars_stripped_without_source_mapping(source):
+    """Sources without a glyph map still never index raw control characters."""
+    doc = _FakeDoc([(_item("text", "Dr Kazancio\x15glu chaired the work group."), 1)])
+    (chunk,) = chunk_document(doc, source)
+
+    assert chunk.text == "Dr Kazancioglu chaired the work group."
+
+
+@pytest.fixture
+def greedy_source():
+    return GuidelineSource(name="Test Guideline", pdf_path="unused.pdf", narrative_packing="greedy")
+
+
+def test_consecutive_short_narrative_items_packed_into_one_window(source):
+    doc = _FakeDoc(
+        [
+            (_item("section_header", "1.1 Detection"), 1),
+            (_item("text", "Outcomes"), 1),
+            (_item("list_item", "Assess kidney function annually."), 1),
+            (_item("text", "Consider albuminuria testing in people at risk."), 2),
+        ]
+    )
+    (chunk,) = chunk_document(doc, source)
+
+    assert chunk.text == (
+        "Outcomes Assess kidney function annually. Consider albuminuria testing in people at risk."
+    )
+    assert chunk.page == 1  # first segment's page
+    assert chunk.section == "1.1 Detection"
+
+
+def test_packing_never_crosses_a_section_or_recommendation(greedy_source):
+    doc = _FakeDoc(
+        [
+            (_item("section_header", "1.1 Detection"), 1),
+            (_item("text", _words(60, "a")), 1),
+            (_item("text", "Practice Point 1.1.1: Test people at risk."), 1),
+            (_item("text", _words(60, "b")), 1),
+            (_item("section_header", "1.2 Staging"), 2),
+            (_item("text", _words(60, "c")), 2),
+        ]
+    )
+    chunks = chunk_document(doc, greedy_source)
+
+    assert [c.label_type for c in chunks] == [None, "Practice Point", None, None]
+    assert [c.section for c in chunks] == ["1.1 Detection"] * 3 + ["1.2 Staging"]
+
+
+def test_packing_closes_window_at_target_size(greedy_source):
+    """Five 100-word paragraphs at a 250-word target -> 200 + 200 + 100."""
+    paragraphs = [_words(100, f"p{i}w") for i in range(5)]
+    doc = _FakeDoc([(_item("text", p), 1) for p in paragraphs])
+    chunks = chunk_document(doc, greedy_source)
+
+    assert [len(c.text.split()) for c in chunks] == [200, 200, 100]
+
+
+def test_small_trailing_window_folds_into_previous_same_section(greedy_source):
+    """240 words fill a window; a 30-word scrap then closes at the section
+    boundary and is folded back rather than left as a fragment chunk.
+    """
+    doc = _FakeDoc(
+        [
+            (_item("section_header", "1.1 Detection"), 1),
+            (_item("text", _words(240, "a")), 1),
+            (_item("text", _words(30, "b")), 1),
+            (_item("section_header", "1.2 Staging"), 2),
+            (_item("text", _words(60, "c")), 2),
+        ]
+    )
+    chunks = chunk_document(doc, greedy_source)
+
+    assert [len(c.text.split()) for c in chunks] == [270, 60]
+    assert [c.section for c in chunks] == ["1.1 Detection", "1.2 Staging"]
+
+
+def test_exact_duplicate_narrative_keeps_last_occurrence(source):
+    """Summary-box text restated in the chapter body: keep the body copy,
+    which packs alongside its own rationale. Normalization ignores case,
+    whitespace, and punctuation differences between the two copies.
+    """
+    doc = _FakeDoc(
+        [
+            (_item("section_header", "Summary of recommendation statements"), 1),
+            (_item("text", "Patients with rapidly progressive IgAN should be offered treatment."), 1),
+            (_item("section_header", "2.4 Special situations"), 50),
+            (
+                _item("text", "Patients with rapidly progressive  IgAN should be offered treatment", page=50),
+                1,
+            ),
+        ]
+    )
+    (chunk,) = chunk_document(doc, source)
+
+    assert chunk.page == 50
+    assert chunk.section == "2.4 Special situations"
+
+
+def test_near_duplicate_narrative_dropped():
+    """Same paragraph with one phrase edited ("are present" -> "is"), as
+    observed between CKD's summary and chapter-body copies.
+    """
+    source = GuidelineSource(name="Test", pdf_path="unused.pdf", narrative_min_words=1)
+    body = " ".join(f"w{i}" for i in range(80))
+    doc = _FakeDoc(
+        [
+            (_item("section_header", "Summary"), 1),
+            (_item("text", f"Risk factors are present when {body}"), 1),
+            (_item("section_header", "3.7 SGLT2i"), 44),
+            (_item("text", f"Risk factors is when {body}", page=44), 1),
+        ]
+    )
+    (chunk,) = chunk_document(doc, source)
+
+    assert chunk.page == 44
+
+
+def test_clinically_distinct_similar_text_not_deduped():
+    """Two evidence tables' titles differing only by population (~0.84
+    similarity in the real corpus) must both survive.
+    """
+    source = GuidelineSource(name="Test", pdf_path="unused.pdf", narrative_standalone_words=1)
+    doc = _FakeDoc(
+        [
+            (
+                _item(
+                    "text",
+                    "Table S11. Adults with CKD, low blood pressure target versus standard target, all outcomes",
+                ),
+                1,
+            ),
+            (
+                _item(
+                    "text",
+                    "Table S14. Adults with CKD without diabetes, low blood pressure target versus standard target",
+                ),
+                1,
+            ),
+        ]
+    )
+    chunks = chunk_document(doc, source)
+
+    assert len(chunks) == 2
+
+
+def test_short_near_duplicates_only_deduped_on_exact_match(source):
+    """Below near_duplicate_min_words, similarity is too unstable to trust --
+    "Stage 1 AKI" vs "Stage 2 AKI" must not collapse.
+    """
+    short_source = GuidelineSource(name="Test", pdf_path="unused.pdf", narrative_standalone_words=1)
+    doc = _FakeDoc([(_item("text", "Stage 1 AKI criteria"), 1), (_item("text", "Stage 2 AKI criteria"), 1)])
+    chunks = chunk_document(doc, short_source)
+
+    assert [c.text for c in chunks] == ["Stage 1 AKI criteria", "Stage 2 AKI criteria"]
+
+
+def test_punctuation_only_narrative_dropped(source):
+    doc = _FakeDoc([(_item("text", "-"), 1), (_item("text", "Real narrative text."), 1)])
+    (chunk,) = chunk_document(doc, source)
+
+    assert chunk.text == "Real narrative text."
+
+
+def test_absorb_keeps_substantive_segments_standalone(source):
+    """Regression for the measured greedy-packing failure: a self-contained
+    30+ word bullet must stay its own chunk, not be diluted into a window.
+    """
+    doc = _FakeDoc(
+        [
+            (_item("section_header", "3.1 BP targets"), 1),
+            (_item("text", _words(40, "a")), 1),
+            (_item("list_item", _words(35, "b")), 1),
+            (_item("list_item", _words(30, "c")), 1),
+        ]
+    )
+    chunks = chunk_document(doc, source)
+
+    assert [len(c.text.split()) for c in chunks] == [40, 35, 30]
+
+
+def test_absorb_prepends_fragments_to_next_standalone_segment(source):
+    """A short lead-in ("Pediatric considerations.") introduces what follows."""
+    doc = _FakeDoc(
+        [
+            (_item("text", "Pediatric considerations."), 1),
+            (_item("text", _words(40, "a")), 1),
+        ]
+    )
+    (chunk,) = chunk_document(doc, source)
+
+    assert chunk.text.startswith("Pediatric considerations. a0")
+
+
+def test_absorb_appends_trailing_fragments_to_previous_standalone(source):
+    doc = _FakeDoc(
+        [
+            (_item("section_header", "1.1 Detection"), 1),
+            (_item("text", _words(40, "a")), 1),
+            (_item("text", "the rate"), 1),
+            (_item("text", "Practice Point 1.1.1: Test people at risk."), 1),
+        ]
+    )
+    narrative, practice_point = chunk_document(doc, source)
+
+    assert narrative.text.endswith("a39 the rate")
+    assert practice_point.label_type == "Practice Point"
+
+
+def test_absorb_fragments_never_cross_sections(source):
+    """A trailing fragment must not attach to a chunk with a different citation context."""
+    doc = _FakeDoc(
+        [
+            (_item("section_header", "1.1 Detection"), 1),
+            (_item("text", _words(40, "a")), 1),
+            (_item("section_header", "1.2 Staging"), 2),
+            (_item("text", "Outcomes"), 2),
+        ]
+    )
+    chunks = chunk_document(doc, source)
+
+    assert [(c.section, len(c.text.split())) for c in chunks] == [("1.1 Detection", 40), ("1.2 Staging", 1)]
+
+
+def test_absorb_run_of_fragments_becomes_own_chunk_at_standalone_size(source):
+    """Many tiny fragments (e.g. table-header cells emitted as text) that add
+    up to standalone size form their own chunk rather than bloating a neighbor.
+    """
+    cells = [(_item("text", f"cell{i} label"), 1) for i in range(15)]  # 2 words each -> 30
+    doc = _FakeDoc([*cells, (_item("text", _words(40, "a")), 1)])
+    chunks = chunk_document(doc, source)
+
+    assert [len(c.text.split()) for c in chunks] == [30, 40]
+
+
+def test_duplicate_table_keeps_first_occurrence(source):
+    """The same figure re-rendered in a later chapter, differing by whitespace."""
+    doc = _FakeDoc(
+        [
+            (_item("section_header", "Chapter 1: General"), 1),
+            (_FakeTable("Figure 8| Management\n\n| ACEi | ARB |", page=39), 1),
+            (_item("section_header", "Chapter 2: IgAN"), 1),
+            (_FakeTable("Figure 8| Management\n\n|  ACEi | ARB |", page=102), 1),
+        ]
+    )
+    (table,) = chunk_document(doc, source)
+
+    assert table.page == 39
+    assert table.chapter == "Chapter 1: General"
