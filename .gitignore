@@ -14,7 +14,7 @@ CLAUDE_ckd_guidelines_rag.md
 data/*.pdf
 
 # vector store persistence
-chroma_db/
+chroma_db*/
 
 # notebooks checkpoints / marimo runtime session cache
 .ipynb_checkpoints/
