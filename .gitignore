@@ -32,3 +32,6 @@ __pycache__/
 
 # local Serena MCP tool config -- not project content
 .serena/
+
+# Docling parse cache (regenerable; see ingest/parser.py)
+data/parsed/
