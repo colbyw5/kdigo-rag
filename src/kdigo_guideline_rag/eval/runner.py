@@ -1,28 +1,21 @@
-"""Runs EVAL_QUESTIONS against the real graph and reports results.
+"""Tier-2 eval: runs questions through the real graph and reports pipeline behavior.
 
-Strict questions pass/fail on whether the expected citations still surface
-after grading -- a regression check for retrieval + grading quality. Loose
-questions have no pass/fail: the new answer is printed next to the recorded
-baseline so a human can judge whether the answer is still clinically sound
-and appropriately hedged, which isn't something a citation match can prove.
+Per question: grader precision (graded-relevant / retrieved, final retrieval
+round) and rewrite count. In-scope questions **pass** when every needle
+survives into the graded documents -- retrieval found it *and* the grader
+kept it. Out-of-scope questions have no pass/fail here; what matters is
+**grader false positives** (chunks passed as relevant to a question the
+corpus doesn't answer), which is what lets the generator extrapolate.
 
-Every question (strict or loose) also reports two retrieval-quality metrics,
-read straight off the final graph state at no extra API cost:
-
-- **precision**: graded-relevant / retrieved for the final retrieval round.
-  Junk chunks (e.g. bibliography text) usually get graded out, so they rarely
-  move pass/fail -- but they still waste top-k slots, which shows up here.
-- **rewrites**: whether the first retrieval found nothing relevant and the
-  query had to be rewritten. ``documents`` only holds the latest round, so a
-  rewrite's failed first round is visible only through this flag.
-
-With 8 questions run once each and an LLM grader, treat these as
-directional, not statistically meaningful.
+The grader is an LLM: identical input moves precision by about +-1 chunk per
+question. Use tier 1 (``retrieval.py``) for index/retrieval decisions; use
+this for grader/rewrite/pipeline changes, and read deltas against that noise.
 """
 
 from dataclasses import dataclass
 
-from kdigo_guideline_rag.eval.questions import EVAL_QUESTIONS, EvalQuestion
+from kdigo_guideline_rag.eval.questions import EvalQuestion
+from kdigo_guideline_rag.eval.retrieval import matches
 from kdigo_guideline_rag.graph import graph
 
 
@@ -31,7 +24,7 @@ class RunResult:
     """Outcome of one eval question.
 
     Attributes:
-        passed: Strict-question verdict, or ``None`` for loose questions.
+        passed: All needles survived grading; ``None`` for out-of-scope questions.
         answer: The generated answer.
         citations: ``(source_guideline, recommendation_number)`` per graded chunk.
         retrieved: Chunks retrieved in the final retrieval round.
@@ -72,61 +65,52 @@ def _run_one(q: EvalQuestion) -> RunResult:
     """Invoke the graph for one question and score it."""
     config = {"configurable": {"guideline_filter": "all", "user_id": f"eval-{q.id}"}}
     result = graph.invoke({"question": q.question}, config=config)
+    graded = result["graded_documents"]
     citations = [
-        (d.metadata.get("source_guideline"), d.metadata.get("recommendation_number"))
-        for d in result["graded_documents"]
+        (d.metadata.get("source_guideline"), d.metadata.get("recommendation_number")) for d in graded
     ]
     retrieved, relevant, rewrites = retrieval_metrics(result)
-
     passed = None
-    if q.grading == "strict":
-        actual_guidelines = {g for g, _ in citations}
-        actual_recs = {r for _, r in citations if r}
-        guidelines_ok = set(q.expected_guidelines) <= actual_guidelines
-        recs_ok = set(q.expected_recommendation_numbers) <= actual_recs
-        passed = guidelines_ok and recs_ok
+    if q.needles:
+        passed = all(any(matches(n, d.page_content, d.metadata) for d in graded) for n in q.needles)
     return RunResult(passed, result["answer"], citations, retrieved, relevant, rewrites)
 
 
-def run_eval() -> bool:
-    """Run the full eval set, print a report, return True iff all strict cases passed."""
-    all_strict_passed = True
-    results: list[RunResult] = []
-    for q in EVAL_QUESTIONS:
-        r = _run_one(q)
-        results.append(r)
-        passed, answer = r.passed, r.answer
-        print(f"\n{'=' * 70}\n[{q.id}] ({q.category}, {q.grading}) {q.question}")
+def run_eval(questions: list[EvalQuestion]) -> bool:
+    """Run ``questions`` through the graph, print a report, return True iff all in-scope ones passed."""
+    results: dict[str, RunResult] = {}
+    for q in questions:
+        r = results[q.id] = _run_one(q)
+        print(f"\n{'=' * 70}\n[{q.id}] ({q.category}, {q.split}) {q.question}")
         print(f"citations: {r.citations}")
         print(
             f"retrieval: {r.relevant}/{r.retrieved} relevant (precision {r.precision:.2f}), rewrites={r.rewrites}"
         )
-
-        if q.grading == "strict":
-            status = "PASS" if passed else "FAIL"
-            print(
-                f"-- {status} -- expected guidelines={q.expected_guidelines} "
-                f"recs={q.expected_recommendation_numbers}"
-            )
-            all_strict_passed = all_strict_passed and bool(passed)
+        if r.passed is not None:
+            print(f"-- {'PASS' if r.passed else 'FAIL'} -- needles: {q.needles}")
         else:
-            print("-- loose, review by hand --")
-            print(f"new answer:\n{answer}")
-            if q.baseline_answer:
-                print(f"\nbaseline answer:\n{q.baseline_answer}")
-            if q.notes:
-                print(f"\nnotes: {q.notes}")
+            print(f"-- out of scope ({q.scope}): grader passed {r.relevant} chunk(s) as relevant --")
+        print(f"answer:\n{r.answer}")
+        if q.baseline_answer:
+            print(f"\nbaseline answer:\n{q.baseline_answer}")
+        if q.notes:
+            print(f"\nnotes: {q.notes}")
 
+    in_scope = [q for q in questions if q.needles]
+    oos = [q for q in questions if not q.needles]
+    passed = [q.id for q in in_scope if results[q.id].passed]
     print(f"\n{'=' * 70}")
-    strict_count = sum(1 for q in EVAL_QUESTIONS if q.grading == "strict")
-    print(f"strict questions: {'all passed' if all_strict_passed else 'FAILURES'} ({strict_count} total)")
-    print(
-        f"loose questions: {sum(1 for q in EVAL_QUESTIONS if q.grading == 'loose')} -- see above for manual review"
-    )
-    total_retrieved = sum(r.retrieved for r in results)
-    total_relevant = sum(r.relevant for r in results)
+    print(f"in-scope: {len(passed)}/{len(in_scope)} passed (all needles survived grading)")
+    print(f"  failed: {[q.id for q in in_scope if not results[q.id].passed]}")
+    if oos:
+        fp = {q.id: results[q.id].relevant for q in oos}
+        print(
+            f"out-of-scope grader false positives: {sum(fp.values())} chunks across {len(oos)} questions {fp}"
+        )
+    in_results = [results[q.id] for q in in_scope]
+    total_retrieved = sum(r.retrieved for r in in_results)
+    total_relevant = sum(r.relevant for r in in_results)
     pooled = total_relevant / total_retrieved if total_retrieved else 0.0
-    rewritten = sum(1 for r in results if r.rewrites)
-    print(f"retrieval precision (pooled): {total_relevant}/{total_retrieved} = {pooled:.2f}")
-    print(f"questions needing a rewrite: {rewritten}/{len(results)}")
-    return all_strict_passed
+    print(f"in-scope grader precision (pooled): {total_relevant}/{total_retrieved} = {pooled:.2f}")
+    print(f"questions needing a rewrite: {sum(1 for r in results.values() if r.rewrites)}/{len(results)}")
+    return len(passed) == len(in_scope)
