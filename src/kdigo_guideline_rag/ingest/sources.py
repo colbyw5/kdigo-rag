@@ -103,6 +103,14 @@ class GuidelineSource:
         near_duplicate_min_words: Items shorter than this are only deduped on
             exact (normalized) match -- similarity scores are unstable on
             very short text.
+        figure_min_words_captioned: A picture with a figure caption is
+            indexed if its own text (excluding the caption) has at least this
+            many words -- low, because a captioned figure is deliberate
+            content (e.g. a 12-word potassium-threshold chart).
+        figure_min_words_uncaptioned: An uncaptioned picture needs at least
+            this many words -- filters logos and mastheads ("INTERNATIONAL
+            SOCIETY OF NEPHROLOGY" is <= 13 words), keeps uncaptioned
+            algorithms (Docling often detaches captions from pictures).
     """
 
     name: str
@@ -120,6 +128,8 @@ class GuidelineSource:
     narrative_min_words: int = 50
     near_duplicate_threshold: float = 0.95
     near_duplicate_min_words: int = 15
+    figure_min_words_captioned: int = 5
+    figure_min_words_uncaptioned: int = 20
 
 
 KDIGO_SOURCES: list[GuidelineSource] = [

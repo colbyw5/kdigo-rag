@@ -6,7 +6,10 @@ and splits ``text``/``list_item`` items at recommendation boundaries defined
 by the active :class:`~kdigo_guideline_rag.ingest.sources.GuidelineSource`.
 Text with no recommendation anchor becomes a narrative chunk instead. Each
 ``table`` item becomes its own chunk (markdown table + resolved caption, via
-Docling's own rendering). Pictures are skipped -- no text content to index.
+Docling's own rendering). Each ``picture`` item with enough text becomes a
+``"Figure"`` chunk: Docling extracts text inside vector figures as the
+picture's children (flowcharts, criteria lists -- e.g. KDIGO CKD Figure 48's
+referral criteria), which would otherwise never reach the index.
 
 Three stages: **extract** one segment per Docling item (or per
 recommendation within an item), **dedupe** (recommendations: exact by
@@ -29,6 +32,9 @@ from kdigo_guideline_rag.ingest.sources import GuidelineSource
 GRADE_PATTERN = re.compile(r"\((\d[A-D]|Not Graded)\)", re.IGNORECASE)
 CHAPTER_PATTERN = re.compile(r"^CHAPTER\s+", re.IGNORECASE)
 CAPTION_ONLY_PATTERN = re.compile(r"^(Figure|Table)\s+\d+\s*\|", re.IGNORECASE)
+# Generic figure-caption shape ("Figure 48|", "Fig. 3.", "Figure 2A:") -- not
+# tied to Kidney International's "Figure N|" house style.
+FIGURE_CAPTION_PATTERN = re.compile(r"^\s*(?:Figure|Fig\.?)\s*\d+[A-Za-z]?\s*[|.:]", re.IGNORECASE)
 
 # Structural shape of a Vancouver-style biomedical citation entry (the
 # convention KDIGO and most clinical guidelines use): "...Year;Vol(Issue):
@@ -48,6 +54,26 @@ REFERENCE_DENSITY_THRESHOLD = 2
 CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class FigureCoverage:
+    """Per-document accounting of picture items, logged at ingest.
+
+    The warning signs for a new document are ``without_any_text`` (an image
+    with no extractable text at all is a raster -- a photo, chart, or scanned
+    figure) and ``captioned_without_text`` (a numbered figure with little
+    text: probably rasterized, or encoding meaning in color like KDIGO's risk
+    heat map). Both are vision-model-fallback candidates, not silent drops.
+    Docling often doesn't link captions to pictures, so the captioned count
+    undercounts; ``without_any_text`` doesn't depend on caption linking.
+    """
+
+    pictures: int = 0
+    indexed: int = 0
+    dropped_low_text: int = 0
+    without_any_text: int = 0
+    captioned_without_text: int = 0
 
 
 @dataclass
@@ -141,7 +167,7 @@ def _dedupe_recommendations(chunks: list[Chunk]) -> list[Chunk]:
 
 
 def _dedupe_tables(chunks: list[Chunk]) -> tuple[list[Chunk], int]:
-    """Drop exact repeats of a table (normalized text), keeping the first.
+    """Drop exact repeats of a table or figure (normalized text), keeping the first.
 
     Guidelines re-render the same figure/table in later chapters that refer
     back to it (e.g. Glomerular Diseases' Figure 8 appears in both the
@@ -151,7 +177,7 @@ def _dedupe_tables(chunks: list[Chunk]) -> tuple[list[Chunk], int]:
     seen: set[str] = set()
     kept: list[Chunk] = []
     for chunk in chunks:
-        if chunk.label_type == "Table":
+        if chunk.label_type in ("Table", "Figure"):
             key = _narrative_key(chunk.text)
             if key in seen:
                 continue
@@ -352,14 +378,15 @@ def chunk_document(doc: DoclingDocument, source: GuidelineSource) -> list[Chunk]
         Recommendation-anchored, table, and packed narrative chunks, in
         reading order.
     """
-    segments = _dedupe_recommendations(_extract_segments(doc, source))
+    segments, coverage = _extract_segments(doc, source)
+    segments = _dedupe_recommendations(segments)
     segments, tables_dropped = _dedupe_tables(segments)
     narrative_before = sum(c.label_type is None for c in segments)
     segments, dropped = _dedupe_narrative(segments, source)
     pack = _absorb_fragments if source.narrative_packing == "absorb" else _pack_narrative
     chunks = pack(segments, source)
     logger.info(
-        "%s: dropped %d duplicate tables and %d/%d narrative segments as exact/near duplicates; "
+        "%s: dropped %d duplicate tables/figures and %d/%d narrative segments as exact/near duplicates; "
         "%s packing -> %d narrative chunks",
         source.name,
         tables_dropped,
@@ -368,14 +395,82 @@ def chunk_document(doc: DoclingDocument, source: GuidelineSource) -> list[Chunk]
         source.narrative_packing,
         sum(c.label_type is None for c in chunks),
     )
+    logger.info(
+        "%s: figures -- %d pictures, %d indexed, %d dropped for too little text; "
+        "vision-fallback candidates: %d with no extractable text, %d captioned but text-poor",
+        source.name,
+        coverage.pictures,
+        coverage.indexed,
+        coverage.dropped_low_text,
+        coverage.without_any_text,
+        coverage.captioned_without_text,
+    )
     return chunks
 
 
-def _extract_segments(doc: DoclingDocument, source: GuidelineSource) -> list[Chunk]:
+def _figure_chunks(
+    item: object,
+    doc: DoclingDocument,
+    source: GuidelineSource,
+    chapter: str | None,
+    section: str | None,
+    coverage: FigureCoverage,
+) -> list[Chunk]:
+    """Turn one Docling ``picture`` into Figure chunks from its own extracted text.
+
+    Uses Docling's generic descendant traversal (nested groups included) and
+    its linked caption, falling back to a caption-shaped child -- no
+    publisher-specific layout assumptions. Text is kept verbatim (only glyph
+    fixes and whitespace collapse): for clinical criteria, the source's own
+    words beat a model-written rewrite, even if flowchart text reads in
+    layout order.
+    """
+    coverage.pictures += 1
+    caption = _fix_chars(item.caption_text(doc) or "", source).strip()
+    body_parts: list[str] = []
+    for child, _level in doc.iterate_items(root=item, traverse_pictures=True):
+        if child is item:
+            continue
+        text = getattr(child, "text", None)
+        if not text:
+            continue
+        text = _strip_noise(_fix_chars(text, source), source)
+        if getattr(child, "label", None) == "caption" or FIGURE_CAPTION_PATTERN.match(text):
+            caption = caption or text
+            continue
+        if text:
+            body_parts.append(text)
+
+    body = " ".join(body_parts)
+    captioned = bool(FIGURE_CAPTION_PATTERN.match(caption))
+    min_words = source.figure_min_words_captioned if captioned else source.figure_min_words_uncaptioned
+    if len(body.split()) < min_words:
+        coverage.dropped_low_text += 1
+        coverage.without_any_text += not body
+        coverage.captioned_without_text += captioned
+        return []
+
+    coverage.indexed += 1
+    prov = getattr(item, "prov", None)
+    return [
+        Chunk(
+            text=f"{caption}\n\n{piece}" if caption else piece,
+            source_guideline=source.name,
+            chapter=chapter,
+            section=section,
+            label_type="Figure",
+            page=prov[0].page_no if prov else None,
+        )
+        for piece in _split_narrative(body, source)
+    ]
+
+
+def _extract_segments(doc: DoclingDocument, source: GuidelineSource) -> tuple[list[Chunk], FigureCoverage]:
     """Walk Docling items in reading order, emitting one segment per
-    recommendation anchor, table, or narrative item (before dedupe/packing).
+    recommendation anchor, table, figure, or narrative item (before dedupe/packing).
     """
     chunks: list[Chunk] = []
+    coverage = FigureCoverage()
     chapter: str | None = None
     section: str | None = None
     in_references = False
@@ -399,6 +494,11 @@ def _extract_segments(doc: DoclingDocument, source: GuidelineSource) -> list[Chu
                         page=prov[0].page_no if prov else None,
                     )
                 )
+            continue
+
+        if label == "picture":
+            if not in_references:
+                chunks.extend(_figure_chunks(item, doc, source, chapter, section, coverage))
             continue
 
         text = getattr(item, "text", None)
@@ -508,4 +608,4 @@ def _extract_segments(doc: DoclingDocument, source: GuidelineSource) -> list[Chu
                 )
             )
 
-    return chunks
+    return chunks, coverage

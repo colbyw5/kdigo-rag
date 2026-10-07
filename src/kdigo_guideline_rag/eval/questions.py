@@ -23,7 +23,7 @@ AKI = "KDIGO 2026 AKI/AKD (Public Review Draft)"
 GLOMERULAR = "KDIGO 2021 Glomerular Diseases"
 BP = "KDIGO 2021 Blood Pressure in CKD"
 
-Category = Literal["recommendation", "table", "narrative", "synthesis", "out_of_scope"]
+Category = Literal["recommendation", "table", "figure", "narrative", "synthesis", "out_of_scope"]
 
 
 @dataclass(frozen=True)
@@ -89,6 +89,11 @@ def table(guideline: str, caption: str) -> Needle:
     return Needle(guideline, label_type="Table", phrase=caption)
 
 
+def figure(guideline: str, text: str) -> Needle:
+    """Needle for a figure chunk (Docling picture text) by its caption or verbatim content."""
+    return Needle(guideline, label_type="Figure", phrase=text)
+
+
 def phrase(guideline: str, text: str) -> Needle:
     """Needle for a verbatim passage in any chunk type."""
     return Needle(guideline, phrase=text)
@@ -102,7 +107,8 @@ class EvalQuestion:
         id: Short identifier, also used as the per-question memory user_id.
         question: The question text sent to the graph.
         category: Query type -- ``"recommendation"`` lookup, ``"table"``/
-            numeric, ``"narrative"`` rationale, cross-guideline
+            numeric, ``"figure"`` (answer only in a figure's text),
+            ``"narrative"`` rationale, cross-guideline
             ``"synthesis"``, or ``"out_of_scope"`` (the correct behavior is
             to say the guidelines don't cover it).
         needles: Gold evidence requirements (each a :class:`Needle` or
@@ -259,13 +265,12 @@ EVAL_QUESTIONS: list[EvalQuestion] = [
         id="ckd_13",
         question="When should I refer a patient with CKD to nephrology?",
         category="recommendation",
-        needles=[pp(CKD, "5.1.1")],
+        needles=[figure(CKD, "Figure 48| Circumstances for referral to specialist kidney care services")],
         split="dev",
         phrasing="lay",
         notes=(
-            "PP 5.1.1 only points to Figure 48, whose criteria (eGFR <30, KRT risk >3-5%/5y, ACR >=300 "
-            "with hematuria, ...) are Docling picture children the chunker drops. Upgrade the needle to "
-            "the figure text once figures are indexed."
+            "PP 5.1.1 only says 'see Figure 48'; the criteria (eGFR <30, KRT risk >3-5%/5y, ACR >=300 "
+            "with hematuria, ...) live in the figure's text, indexed since 2026-10-06."
         ),
     ),
     EvalQuestion(
@@ -297,6 +302,14 @@ EVAL_QUESTIONS: list[EvalQuestion] = [
         category="recommendation",
         needles=[pp(CKD, "5.4.3")],
         split="dev",
+    ),
+    # Answerable only from figure text (Docling picture children), indexed 2026-10-06.
+    EvalQuestion(
+        id="ckd_18",
+        question="How should serum potassium be monitored after starting finerenone?",
+        category="figure",
+        needles=[figure(CKD, "Figure 26| Serum potassium monitoring during treatment")],
+        split="heldout",
     ),
     # ---------------------------------------------------------------- AKI
     EvalQuestion(
@@ -402,7 +415,9 @@ EVAL_QUESTIONS: list[EvalQuestion] = [
             "factor for disease progression?"
         ),
         category="recommendation",
-        needles=[rec(GLOMERULAR, "3.3.1")],
+        needles=[
+            any_of(rec(GLOMERULAR, "3.3.1"), figure(GLOMERULAR, "Figure 31| Risk-based treatment of MN"))
+        ],
         split="dev",
     ),
     EvalQuestion(
@@ -458,6 +473,19 @@ EVAL_QUESTIONS: list[EvalQuestion] = [
                 GLOMERULAR, "Rapidly progressive IgAN is defined as a ≥ 50% decline in eGFR over ≤ 3 months"
             )
         ],
+        split="dev",
+    ),
+    EvalQuestion(
+        id="glom_10",
+        question="How should PLA2R antibody levels guide monitoring after starting treatment for membranous nephropathy?",
+        category="recommendation",
+        needles=[
+            any_of(
+                pp(GLOMERULAR, "3.3.4"),
+                figure(GLOMERULAR, "Figure 33| Immunologic monitoring in MN after start of therapy"),
+            )
+        ],
+        notes="Drafted as figure-only, but PP 3.3.4 answers it directly -- recategorized.",
         split="dev",
     ),
     # ------------------------------------------------------------------ BP
@@ -532,6 +560,14 @@ EVAL_QUESTIONS: list[EvalQuestion] = [
         needles=[phrase(BP, "The Work Group chose not to provide a target for DBP")],
         split="heldout",
     ),
+    EvalQuestion(
+        id="bp_9",
+        question="How should metformin dosing be adjusted as eGFR declines?",
+        category="figure",
+        needles=[figure(BP, "Stop metformin; do not initiate metformin")],
+        split="dev",
+        notes="Uncaptioned figure (Docling detached the caption); only the figure carries the eGFR dosing bands.",
+    ),
     # ------------------------------------------------- cross-guideline
     EvalQuestion(
         id="aki_ckd_1",
@@ -551,7 +587,13 @@ EVAL_QUESTIONS: list[EvalQuestion] = [
         id="glom_bp_1",
         question="A patient with lupus nephritis also has hypertension -- how should blood pressure be managed?",
         category="synthesis",
-        needles=[rec(GLOMERULAR, "2.3.1"), phrase(GLOMERULAR, "Practice Point 1.5.2")],
+        needles=[
+            rec(GLOMERULAR, "2.3.1"),
+            any_of(
+                phrase(GLOMERULAR, "Practice Point 1.5.2"),
+                figure(GLOMERULAR, "Figure 9| Management of hypertension in glomerular disease"),
+            ),
+        ],
         split="dev",
         notes=(
             "Glomerular Ch 1 general BP principles apply by reference; PP 1.5.2 (SBP <120) exists "

@@ -52,3 +52,15 @@ def test_grade_returns_empty_list_for_no_documents():
         out = grade({"question": "q", "documents": []})
 
     assert out["graded_documents"] == []
+
+
+def test_cite_names_figure_number_for_figure_chunks() -> None:
+    from langchain_core.documents import Document
+
+    from kdigo_guideline_rag.nodes import _cite
+
+    doc = Document(
+        page_content="Figure 48| Circumstances for referral\n\n• eGFR <30",
+        metadata={"source_guideline": "KDIGO 2024 CKD", "chapter": "Chapter 5", "label_type": "Figure"},
+    )
+    assert _cite(doc) == "KDIGO 2024 CKD, Chapter 5, Figure 48"

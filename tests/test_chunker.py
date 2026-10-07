@@ -33,11 +33,28 @@ class _FakeTable:
         return self._markdown
 
 
+class _FakePicture:
+    """Docling picture: its own extracted text lives in descendants, reached via
+    iterate_items(root=picture, traverse_pictures=True), which yields the root first.
+    """
+
+    def __init__(self, children, caption="", page=1):
+        self.label = "picture"
+        self.prov = [SimpleNamespace(page_no=page)]
+        self.children = children
+        self._caption = caption
+
+    def caption_text(self, doc):
+        return self._caption
+
+
 class _FakeDoc:
     def __init__(self, items):
         self._items = items
 
-    def iterate_items(self):
+    def iterate_items(self, root=None, traverse_pictures=False):
+        if root is not None:
+            return iter([(root, 0)] + [(child, 1) for child in root.children])
         return iter(self._items)
 
 
@@ -568,3 +585,91 @@ def test_duplicate_table_keeps_first_occurrence(source):
 
     assert table.page == 39
     assert table.chapter == "Chapter 1: General"
+
+
+def _figure(words: int, caption: str = "", page: int = 1, prefix: str = "w") -> _FakePicture:
+    cells = [_item("text", f"{prefix}{i}") for i in range(words)]
+    return _FakePicture(cells, caption=caption, page=page)
+
+
+def test_captioned_figure_becomes_figure_chunk_with_caption_first(source):
+    """Docling extracts vector-figure text as picture children (e.g. CKD Figure
+    48's referral criteria); it must reach the index, caption first.
+    """
+    doc = _FakeDoc(
+        [
+            (_item("section_header", "5.1 Referral"), 1),
+            (
+                _FakePicture(
+                    [_item("text", "eGFR <30 ml/min"), _item("text", "ACR ≥300 mg/g")],
+                    caption="Figure 48| Referral",
+                ),
+                1,
+            ),
+        ]
+    )
+    (chunk,) = chunk_document(doc, source)
+
+    assert chunk.label_type == "Figure"
+    assert chunk.text == "Figure 48| Referral\n\neGFR <30 ml/min ACR ≥300 mg/g"
+    assert chunk.section == "5.1 Referral"
+
+
+def test_caption_shaped_child_used_when_docling_detached_the_caption(source):
+    """Docling often leaves the caption as an ordinary child text item."""
+    pic = _FakePicture([_item("text", "Figure 13 | AKI risk"), *[_item("text", f"x{i}") for i in range(6)]])
+    (chunk,) = chunk_document(_FakeDoc([(pic, 1)]), source)
+
+    assert chunk.text.startswith("Figure 13 | AKI risk\n\nx0")
+
+
+def test_uncaptioned_logo_dropped_but_uncaptioned_algorithm_kept(source):
+    doc = _FakeDoc(
+        [
+            (_FakePicture([_item("text", "INTERNATIONAL SOCIETY OF NEPHROLOGY")]), 1),
+            (_figure(25, prefix="step", page=2), 1),
+        ]
+    )
+    (chunk,) = chunk_document(doc, source)
+
+    assert chunk.page == 2 and chunk.label_type == "Figure"
+
+
+def test_short_captioned_figure_kept_at_lower_threshold(source):
+    """A captioned figure is deliberate content even when short (the real
+    potassium-threshold chart is 12 words)."""
+    (chunk,) = chunk_document(_FakeDoc([(_figure(6, caption="Figure 26| Serum potassium"), 1)]), source)
+
+    assert chunk.text.startswith("Figure 26| Serum potassium")
+
+
+def test_figure_thresholds_are_per_source_config():
+    strict = GuidelineSource(name="T", pdf_path="unused.pdf", figure_min_words_captioned=50)
+    assert chunk_document(_FakeDoc([(_figure(6, caption="Figure 1| Chart"), 1)]), strict) == []
+
+
+def test_large_figure_split_with_caption_repeated():
+    source = GuidelineSource(
+        name="T", pdf_path="unused.pdf", narrative_chunk_size=10, narrative_chunk_overlap=0
+    )
+    chunks = chunk_document(_FakeDoc([(_figure(20, caption="Figure 9| Big"), 1)]), source)
+
+    assert len(chunks) == 2
+    assert all(c.text.startswith("Figure 9| Big\n\n") for c in chunks)
+
+
+def test_figures_inside_references_are_skipped(source):
+    doc = _FakeDoc([(_item("section_header", "References"), 1), (_figure(30, caption="Figure 2| Flow"), 1)])
+    assert chunk_document(doc, source) == []
+
+
+def test_duplicate_figure_keeps_first_occurrence(source):
+    doc = _FakeDoc(
+        [
+            (_figure(10, caption="Figure 41| X", page=64), 1),
+            (_figure(10, caption="Figure 41| X", page=153), 1),
+        ]
+    )
+    (chunk,) = chunk_document(doc, source)
+
+    assert chunk.page == 64

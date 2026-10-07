@@ -1,6 +1,7 @@
 """Graph node functions: retrieve, grade, generate, rewrite."""
 
 import logging
+import re
 from functools import lru_cache
 
 from langchain_anthropic import ChatAnthropic
@@ -40,6 +41,9 @@ def get_llm() -> ChatAnthropic:
     return ChatAnthropic(model=MODEL)
 
 
+FIGURE_LABEL_PATTERN = re.compile(r"^\s*((?:Figure|Fig\.?)\s*\d+[A-Za-z]?)", re.IGNORECASE)
+
+
 def _cite(doc: Document) -> str:
     m = doc.metadata
     parts = [m.get("source_guideline", "Unknown guideline")]
@@ -47,6 +51,8 @@ def _cite(doc: Document) -> str:
         parts.append(m["chapter"])
     if m.get("label_type") and m.get("recommendation_number"):
         parts.append(f"{m['label_type']} {m['recommendation_number']}")
+    elif m.get("label_type") == "Figure" and (figure := FIGURE_LABEL_PATTERN.match(doc.page_content)):
+        parts.append(figure.group(1))
     return ", ".join(parts)
 
 
