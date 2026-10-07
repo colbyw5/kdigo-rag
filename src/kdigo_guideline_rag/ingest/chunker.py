@@ -28,6 +28,7 @@ from difflib import SequenceMatcher
 from docling_core.types.doc.document import DoclingDocument
 
 from kdigo_guideline_rag.ingest.sources import GuidelineSource
+from kdigo_guideline_rag.ingest.text_repair import repair_missing_spaces, repair_split_ligatures
 
 GRADE_PATTERN = re.compile(r"\((\d[A-D]|Not Graded)\)", re.IGNORECASE)
 CHAPTER_PATTERN = re.compile(r"^CHAPTER\s+", re.IGNORECASE)
@@ -104,13 +105,19 @@ class Chunk:
 
 
 def _fix_chars(text: str, source: GuidelineSource) -> str:
-    """Apply the source's glyph fixes, then drop any remaining control characters.
+    """Apply the source's glyph fixes, drop remaining control characters, then
+    repair split ligatures and missing spaces (each switchable per source).
 
-    Whitespace is left alone so table markdown keeps its line structure.
+    Line structure is left alone so table markdown keeps its rows.
     """
     if source.char_replacements:
         text = text.translate(str.maketrans(source.char_replacements))
-    return CONTROL_CHAR_PATTERN.sub("", text)
+    text = CONTROL_CHAR_PATTERN.sub("", text)
+    if source.repair_split_ligatures:
+        text = repair_split_ligatures(text)
+    if source.repair_missing_spaces:
+        text = repair_missing_spaces(text)
+    return text
 
 
 def _strip_noise(text: str, source: GuidelineSource) -> str:

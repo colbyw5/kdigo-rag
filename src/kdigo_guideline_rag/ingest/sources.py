@@ -81,6 +81,10 @@ class GuidelineSource:
         char_replacements: Single-character fixes applied to all extracted
             text (headings, narrative, tables) before anything else -- for
             mis-decoded font glyphs, e.g. :data:`KI_SYMBOL_FONT_MAP`.
+        repair_split_ligatures: Rejoin ligature fragments ("bene fi ts" ->
+            "benefits") using word frequencies; see ``text_repair.py``.
+        repair_missing_spaces: Re-insert spaces in long no-space runs
+            ("WesuggestthatadultswithhighBP...").
         narrative_chunk_size: Hard upper bound (words) for one narrative
             item; longer items are split into overlapping windows.
         narrative_chunk_overlap: Overlap (words) between those split windows.
@@ -120,6 +124,8 @@ class GuidelineSource:
     reference_heading_pattern: re.Pattern | None = REFERENCE_HEADING_PATTERN
     noise_patterns: list[re.Pattern] = field(default_factory=list)
     char_replacements: dict[str, str] = field(default_factory=dict)
+    repair_split_ligatures: bool = True
+    repair_missing_spaces: bool = True
     narrative_chunk_size: int = 500
     narrative_chunk_overlap: int = 50
     narrative_packing: Literal["absorb", "greedy"] = "absorb"
