@@ -12,6 +12,17 @@ GUIDELINE_FILTER_MAP = {
     "bp_only": "KDIGO 2021 Blood Pressure in CKD",
 }
 
+# Passages always given to the generator alongside retrieved chunks, as
+# (source_guideline, caption prefix) -- verbatim corpus text, so explaining an
+# evidence grade ("1B") is grounded and citable instead of model knowledge.
+# Chosen by reading the extracted text, not just matching captions: the CKD
+# guideline's certainty table (Table 45) extracts with merged cells that read
+# as "B = Low", so the BP guideline's clean copy is used instead.
+REFERENCE_PASSAGES = (
+    ("KDIGO 2024 CKD Evaluation and Management", "Table 47| KDIGO nomenclature and description for grading"),
+    ("KDIGO 2021 Blood Pressure in CKD", "Table 3| Classification for certainty and quality of the evidence"),
+)
+
 
 @dataclass
 class Configuration:

@@ -12,11 +12,17 @@ question. Use tier 1 (``retrieval.py``) for index/retrieval decisions; use
 this for grader/rewrite/pipeline changes, and read deltas against that noise.
 """
 
-from dataclasses import dataclass
+import json
+from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
 
 from kdigo_guideline_rag.eval.questions import EvalQuestion
 from kdigo_guideline_rag.eval.retrieval import matches
 from kdigo_guideline_rag.graph import graph
+from kdigo_guideline_rag.nodes import _cite, format_context
+
+RUNS_DIR = Path(__file__).resolve().parents[3] / "eval_runs"
 
 
 @dataclass
@@ -30,6 +36,9 @@ class RunResult:
         retrieved: Chunks retrieved in the final retrieval round.
         relevant: Chunks from that round that survived grading.
         rewrites: Number of query rewrites the run needed.
+        context: The graded passages exactly as the generate prompt saw them
+            (citation headers included) -- what tier 3 judges against.
+        cited_passages: ``(citation header, text)`` per graded passage.
     """
 
     passed: bool | None
@@ -38,6 +47,9 @@ class RunResult:
     retrieved: int
     relevant: int
     rewrites: int
+    context: str = ""
+    cited_passages: list[tuple[str, str]] = field(default_factory=list)
+    error: str | None = None
 
     @property
     def precision(self) -> float:
@@ -73,14 +85,52 @@ def _run_one(q: EvalQuestion) -> RunResult:
     passed = None
     if q.needles:
         passed = all(any(matches(n, d.page_content, d.metadata) for d in graded) for n in q.needles)
-    return RunResult(passed, result["answer"], citations, retrieved, relevant, rewrites)
+    return RunResult(
+        passed,
+        result["answer"],
+        citations,
+        retrieved,
+        relevant,
+        rewrites,
+        context=format_context(result.get("generation_documents", [])),
+        cited_passages=[(_cite(d), d.page_content) for d in result.get("generation_documents", [])],
+    )
 
 
-def run_eval(questions: list[EvalQuestion]) -> bool:
-    """Run ``questions`` through the graph, print a report, return True iff all in-scope ones passed."""
+def save_run(questions: list[EvalQuestion], results: dict[str, RunResult], split: str) -> Path:
+    """Persist a pipeline run (answers + the exact passages behind them) for tier-3 judging.
+
+    Saved runs let the judge be re-run on identical answers -- to measure the
+    judge's own noise -- without paying to regenerate them.
+    """
+    RUNS_DIR.mkdir(exist_ok=True)
+    path = RUNS_DIR / f"{datetime.now(UTC):%Y%m%d-%H%M%S}-{split}.json"
+    rows = [
+        {
+            "id": q.id,
+            "question": q.question,
+            "category": q.category,
+            "scope": q.scope,
+            "split": q.split,
+            **asdict(results[q.id]),
+        }
+        for q in questions
+    ]
+    path.write_text(json.dumps(rows, indent=2, ensure_ascii=False))
+    return path
+
+
+def run_eval(questions: list[EvalQuestion], split: str = "dev") -> bool:
+    """Run ``questions`` through the graph, print a report, save the run for
+    tier 3, return True iff all in-scope ones passed."""
     results: dict[str, RunResult] = {}
     for q in questions:
-        r = results[q.id] = _run_one(q)
+        try:
+            r = results[q.id] = _run_one(q)
+        except Exception as e:  # noqa: BLE001 -- one failed question must not discard the run
+            results[q.id] = RunResult(None, "", [], 0, 0, 0, error=f"{type(e).__name__}: {e}")
+            print(f"\n{'=' * 70}\n[{q.id}] ERROR -- {results[q.id].error}")
+            continue
         print(f"\n{'=' * 70}\n[{q.id}] ({q.category}, {q.split}) {q.question}")
         print(f"citations: {r.citations}")
         print(
@@ -96,10 +146,13 @@ def run_eval(questions: list[EvalQuestion]) -> bool:
         if q.notes:
             print(f"\nnotes: {q.notes}")
 
-    in_scope = [q for q in questions if q.needles]
-    oos = [q for q in questions if not q.needles]
+    errored = [q.id for q in questions if results[q.id].error]
+    in_scope = [q for q in questions if q.needles and not results[q.id].error]
+    oos = [q for q in questions if not q.needles and not results[q.id].error]
     passed = [q.id for q in in_scope if results[q.id].passed]
     print(f"\n{'=' * 70}")
+    if errored:
+        print(f"ERRORED (excluded from all metrics): {errored}")
     print(f"in-scope: {len(passed)}/{len(in_scope)} passed (all needles survived grading)")
     print(f"  failed: {[q.id for q in in_scope if not results[q.id].passed]}")
     if oos:
@@ -113,4 +166,5 @@ def run_eval(questions: list[EvalQuestion]) -> bool:
     pooled = total_relevant / total_retrieved if total_retrieved else 0.0
     print(f"in-scope grader precision (pooled): {total_relevant}/{total_retrieved} = {pooled:.2f}")
     print(f"questions needing a rewrite: {sum(1 for r in results.values() if r.rewrites)}/{len(results)}")
+    print(f"run saved for tier-3 judging: {save_run(questions, results, split)}")
     return len(passed) == len(in_scope)

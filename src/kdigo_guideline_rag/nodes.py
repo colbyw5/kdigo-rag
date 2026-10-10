@@ -9,13 +9,14 @@ from langchain_core.documents import Document
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 
-from kdigo_guideline_rag.configuration import GUIDELINE_FILTER_MAP, Configuration
+from kdigo_guideline_rag.configuration import GUIDELINE_FILTER_MAP, REFERENCE_PASSAGES, Configuration
 from kdigo_guideline_rag.ingest.embed import get_vectorstore
 from kdigo_guideline_rag.prompts import (
     GENERATE_SYSTEM_PROMPT,
     GENERATE_USER_PROMPT,
     GRADE_SYSTEM_PROMPT,
     GRADE_USER_PROMPT,
+    NOT_COVERED_RESPONSE,
     REWRITE_SYSTEM_PROMPT,
     REWRITE_USER_PROMPT,
 )
@@ -38,7 +39,10 @@ class GradeResult(BaseModel):
 @lru_cache(maxsize=1)
 def get_llm() -> ChatAnthropic:
     """Shared, cached chat model -- reused by nodes.py and memory.py."""
-    return ChatAnthropic(model=MODEL)
+    # Each question makes ~7 calls (memory, 5 grades, generate); with the SDK's
+    # default 2 retries, one dropped connection killed whole eval runs.
+    # timeout bounds a stalled connection (one hung 9.5 h); retries then recover it.
+    return ChatAnthropic(model=MODEL, max_retries=6, timeout=120)
 
 
 FIGURE_LABEL_PATTERN = re.compile(r"^\s*((?:Figure|Fig\.?)\s*\d+[A-Za-z]?)", re.IGNORECASE)
@@ -54,6 +58,43 @@ def _cite(doc: Document) -> str:
     elif m.get("label_type") == "Figure" and (figure := FIGURE_LABEL_PATTERN.match(doc.page_content)):
         parts.append(figure.group(1))
     return ", ".join(parts)
+
+
+@lru_cache(maxsize=1)
+def reference_documents() -> tuple[Document, ...]:
+    """Load the always-included reference passages (KDIGO grading tables) from the index.
+
+    Raises if any is missing -- a silently absent reference would quietly
+    turn grounded grade explanations back into unsupported ones.
+    """
+    vectorstore = get_vectorstore(reset=False)
+    docs = []
+    for guideline, caption in REFERENCE_PASSAGES:
+        found = vectorstore.get(
+            where={"$and": [{"source_guideline": guideline}, {"label_type": "Table"}]},
+            include=["documents", "metadatas"],
+        )
+        match = next(
+            (
+                Document(page_content=t, metadata=m)
+                for t, m in zip(found["documents"], found["metadatas"], strict=True)
+                if t.startswith(caption)
+            ),
+            None,
+        )
+        if match is None:
+            raise LookupError(f"Reference passage not in index: {guideline!r} / {caption!r}")
+        docs.append(match)
+    return tuple(docs)
+
+
+def format_context(docs: list[Document]) -> str:
+    """Render graded passages exactly as the generate prompt receives them.
+
+    Shared with the eval judge, so answers are judged against the same text
+    (and citation headers) the generator actually saw.
+    """
+    return "\n\n".join(f"[{_cite(doc)}]\n{doc.page_content}" for doc in docs)
 
 
 def prepare(state: GraphState) -> dict:
@@ -106,22 +147,48 @@ def grade(state: GraphState) -> dict:
     return {"graded_documents": relevant}
 
 
-def generate(state: GraphState) -> dict:
-    """Synthesize a cited answer from the graded, relevant chunks."""
-    context = "\n\n".join(f"[{_cite(doc)}]\n{doc.page_content}" for doc in state["graded_documents"])
+def _searched_guidelines(cfg: Configuration) -> str:
+    if cfg.guideline_filter != "all":
+        return GUIDELINE_FILTER_MAP[cfg.guideline_filter]
+    names = list(GUIDELINE_FILTER_MAP.values())
+    return ", ".join(names[:-1]) + ", and " + names[-1]
+
+
+def generate(state: GraphState, config: RunnableConfig) -> dict:
+    """Synthesize a cited answer from the graded, relevant chunks.
+
+    With no relevant chunks there is nothing to cite, so no LLM is called: a
+    fixed response names the guidelines searched. Prompting the model to
+    decline proved unreliable -- given an empty context it stated ESA
+    hemoglobin targets and tolvaptan dosing from its own knowledge
+    (DECISIONS.md 2026-10-09) -- so this is enforced structurally, not by
+    prompt. Answers the user's original question; a rewritten one exists only
+    to improve retrieval.
+    """
+    if not state["graded_documents"]:
+        cfg = Configuration.from_runnable_config(config)
+        return {
+            "answer": NOT_COVERED_RESPONSE.format(searched=_searched_guidelines(cfg)),
+            "generation_documents": [],
+        }
+    graded = state["graded_documents"]
+    docs = graded + [
+        ref for ref in reference_documents() if ref.page_content not in {d.page_content for d in graded}
+    ]
+    context = format_context(docs)
     messages = [
         ("system", GENERATE_SYSTEM_PROMPT),
         (
             "user",
             GENERATE_USER_PROMPT.format(
                 user_context=state.get("user_context") or "(none learned yet)",
-                question=state["question"],
+                question=state.get("original_question") or state["question"],
                 context=context,
             ),
         ),
     ]
     response = get_llm().invoke(messages)
-    return {"answer": response.text}
+    return {"answer": response.text, "generation_documents": docs}
 
 
 def rewrite(state: GraphState) -> dict:

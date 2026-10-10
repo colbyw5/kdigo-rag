@@ -35,3 +35,6 @@ __pycache__/
 
 # Docling parse cache (regenerable; see ingest/parser.py)
 data/parsed/
+
+# saved eval runs (tier-3 judge inputs/outputs)
+eval_runs/
