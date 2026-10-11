@@ -16,6 +16,7 @@ line-length = 110
 [tool.pytest.ini_options]
 markers = ["integration: requires live API keys and network access (Voyage/Anthropic); excluded by default"]
 addopts = "-m 'not integration'"
+pythonpath = ["."]  # lets tests import app/ui_helpers.py (the UI env doesn't install the package)
 
 [tool.pixi.workspace]
 channels = ["conda-forge"]
@@ -31,6 +32,7 @@ lint = "ruff check ."
 fmt = "ruff format ."
 ingest = { cmd = "python -m kdigo_guideline_rag.ingest", env = { TORCH_COMPILE_DISABLE = "1", PYTORCH_JIT = "0" } }
 explore = "marimo edit notebooks/exploration.py"
+dev = "langgraph dev"
 eval = "python -m kdigo_guideline_rag.eval pipeline"
 eval-retrieval = "python -m kdigo_guideline_rag.eval retrieval"
 eval-verify = "python -m kdigo_guideline_rag.eval verify"
@@ -51,8 +53,23 @@ tesseract = "*"
 [tool.pixi.feature.docparse.pypi-dependencies]
 unstructured = { version = "*", extras = ["pdf"] }
 
+# Streamlit client: talks to the LangGraph API server over HTTP only, so it
+# deliberately excludes the RAG package and its PDF/ML stack (Docling, torch).
+[tool.pixi.feature.ui.dependencies]
+python = "3.11.*"
+
+# Both from PyPI: conda's streamlit pins websockets 17, which langgraph-sdk
+# (websockets<17) can't use -- one resolver picks compatible versions.
+[tool.pixi.feature.ui.pypi-dependencies]
+streamlit = ">=1.50,<2"
+langgraph-sdk = ">=0.4,<0.5"
+
+[tool.pixi.feature.ui.tasks]
+ui = "streamlit run app/streamlit_app.py"
+
 [tool.pixi.environments]
 default = { features = ["dev"], solve-group = "default" }
+ui = { features = ["ui"], no-default-feature = true }
 docparse = { features = ["docparse"], solve-group = "docparse" }
 
 [dependency-groups]

@@ -32,7 +32,9 @@ HAS_LIVE_KEYS = bool(os.environ.get("ANTHROPIC_API_KEY")) and bool(os.environ.ge
 @pytest.mark.integration
 @pytest.mark.skipif(not HAS_LIVE_KEYS, reason="requires ANTHROPIC_API_KEY and VOYAGE_API_KEY")
 def test_end_to_end_query_produces_cited_answer():
-    from kdigo_guideline_rag.graph import graph
+    from kdigo_guideline_rag.graph import build_local_graph
+
+    graph = build_local_graph()
 
     result = graph.invoke({"question": "Should a patient with G3b A2 CKD be on an SGLT2 inhibitor?"})
 
@@ -44,10 +46,21 @@ def test_end_to_end_query_produces_cited_answer():
 @pytest.mark.integration
 @pytest.mark.skipif(not HAS_LIVE_KEYS, reason="requires ANTHROPIC_API_KEY and VOYAGE_API_KEY")
 def test_user_context_persists_across_invocations_for_same_user():
-    from kdigo_guideline_rag.graph import graph
+    from kdigo_guideline_rag.graph import build_local_graph
+
+    graph = build_local_graph()
 
     config = {"configurable": {"user_id": "pytest-user"}}
     graph.invoke({"question": "As a nephrology fellow, what is the CKD definition?"}, config=config)
     second = graph.invoke({"question": "What about referral criteria?"}, config=config)
 
     assert "nephrology fellow" in second["user_context"]
+
+
+def test_served_graph_has_no_store_but_local_graph_does():
+    """The LangGraph server rejects a graph with its own store (it injects
+    persistence); local callers still need one for user-context memory."""
+    from kdigo_guideline_rag.graph import build_local_graph, graph
+
+    assert graph.store is None
+    assert build_local_graph().store is not None

@@ -19,10 +19,12 @@ from pathlib import Path
 
 from kdigo_guideline_rag.eval.questions import EvalQuestion
 from kdigo_guideline_rag.eval.retrieval import matches
-from kdigo_guideline_rag.graph import graph
+from kdigo_guideline_rag.graph import build_local_graph
 from kdigo_guideline_rag.nodes import _cite, format_context
 
 RUNS_DIR = Path(__file__).resolve().parents[3] / "eval_runs"
+
+graph = build_local_graph()
 
 
 @dataclass

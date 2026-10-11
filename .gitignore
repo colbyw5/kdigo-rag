@@ -38,3 +38,6 @@ data/parsed/
 
 # saved eval runs (tier-3 judge inputs/outputs)
 eval_runs/
+
+# langgraph dev local server state
+.langgraph_api/

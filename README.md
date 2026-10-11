@@ -12,6 +12,8 @@ cp .env.example .env      # fill in ANTHROPIC_API_KEY, VOYAGE_API_KEY, etc.
 pixi run ingest            # chunk + embed guidelines into Chroma
 pixi run test               # run test suite
 pixi run explore            # interactive marimo notebook: ask questions, inspect retrieval/grading
+pixi run dev                # local LangGraph API server + Studio link (graph view, per-node state)
+pixi run ui                 # Streamlit chat app (run alongside `pixi run dev`)
 pixi run eval-retrieval     # tier 1: deterministic retrieval hit@5/recall@5/MRR on the dev split (no LLM)
 pixi run eval               # tier 2: full graph on the dev split -- grader precision, needle survival, OOS false positives
 pixi run eval-judge         # tier 3: Claude Opus 5.5 judges the saved answers -- material errors, abstention, citations
@@ -43,6 +45,10 @@ User question
 ```
 
 Knowledge base: KDIGO 2024 CKD Evaluation and Management, KDIGO 2026 AKI/AKD (public review draft), KDIGO 2021 Glomerular Diseases, KDIGO 2021 Blood Pressure in CKD.
+
+## Chat UI
+
+`pixi run ui` starts a Streamlit chat app that talks to the LangGraph API server over HTTP (`langgraph_sdk`) — `pixi run dev` locally, the Docker deployment later via `LANGGRAPH_API_URL`. It runs in its own lightweight pixi environment (Streamlit + SDK only, none of the PDF/ML stack). Each answer shows its cited source passages; KDIGO's grading tables, which accompany every answer, are listed separately. Follow-up questions don't yet see earlier turns.
 
 ## Deploy
 

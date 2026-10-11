@@ -23,8 +23,9 @@ def _(mo):
 
 @app.cell
 def _():
-    from kdigo_guideline_rag.graph import graph
+    from kdigo_guideline_rag.graph import build_local_graph
 
+    graph = build_local_graph()
     return (graph,)
 
 

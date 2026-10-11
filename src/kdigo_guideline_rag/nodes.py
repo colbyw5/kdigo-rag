@@ -76,7 +76,8 @@ def reference_documents() -> tuple[Document, ...]:
         )
         match = next(
             (
-                Document(page_content=t, metadata=m)
+                # Flagged so clients can show them apart from retrieved passages.
+                Document(page_content=t, metadata={**m, "reference": True})
                 for t, m in zip(found["documents"], found["metadatas"], strict=True)
                 if t.startswith(caption)
             ),
