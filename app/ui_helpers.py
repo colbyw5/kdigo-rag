@@ -68,13 +68,22 @@ def sources_from_state(state: dict) -> list[Source]:
     return sources
 
 
+def interpreted_as(state: dict) -> str | None:
+    """The standalone question a follow-up was condensed into, or None if unchanged."""
+    standalone = state.get("standalone_question")
+    return standalone if standalone and standalone != state.get("original_question") else None
+
+
 def pipeline_summary(state: dict) -> dict[str, object]:
     """What the pipeline did for this question -- for the debug panel."""
-    question = state.get("original_question") or state.get("question", "")
-    rewritten = state.get("question") if state.get("question") != question else None
+    standalone = (
+        state.get("standalone_question") or state.get("original_question") or state.get("question", "")
+    )
+    query = state.get("question")
     return {
+        "interpreted as": interpreted_as(state),
         "retrieved": len(state.get("documents") or []),
         "graded relevant": len(state.get("graded_documents") or []),
-        "rewritten query": rewritten,
+        "rewritten retrieval query": query if query and query != standalone else None,
         "what's known about you": state.get("user_context") or "(nothing yet)",
     }

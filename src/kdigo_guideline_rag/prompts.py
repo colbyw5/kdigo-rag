@@ -68,3 +68,21 @@ REWRITE_USER_PROMPT = """Original question: {question}"""
 NOT_COVERED_RESPONSE = """The indexed guidelines don't address this question: no passage relevant \
 to it was found in {searched}. No answer is given, because this assistant answers only from those \
 guideline texts -- the question may be covered by a guideline or source outside this knowledge base."""
+
+CONDENSE_SYSTEM_PROMPT = """You turn the latest message in a conversation with a \
+clinical guideline assistant into a standalone question that can be understood \
+without the conversation.
+
+Rules:
+1. Carry forward only the context the latest message depends on -- the patient's \
+details (stage, labs, diagnoses, medications) or the topic it refers back to \
+("they", "it", "what about in children?").
+2. If the latest message is already self-contained or changes topic, return it \
+unchanged. Never import details from earlier turns that it doesn't rely on.
+3. Do not answer the question, add facts, or add clinical judgment.
+4. Return only the standalone question."""
+
+CONDENSE_USER_PROMPT = """Conversation so far:
+{history}
+
+Latest message: {question}"""

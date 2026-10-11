@@ -131,3 +131,101 @@ def test_generate_appends_reference_passages_once_and_records_them():
         out2 = generate({"question": "q", "graded_documents": _docs(2)}, {"configurable": {}})
     assert [d.page_content for d in out["generation_documents"]].count(ref.page_content) == 1
     assert out2["generation_documents"][-1] is ref
+
+
+def test_prepare_records_the_users_message_and_resets_turn_state():
+    from langchain_core.messages import HumanMessage
+
+    from kdigo_guideline_rag.nodes import prepare
+
+    out = prepare({"question": "Should they get an SGLT2i?", "rewrite_count": 1})
+    assert out["original_question"] == out["standalone_question"] == "Should they get an SGLT2i?"
+    assert out["rewrite_count"] == 0
+    assert out["messages"] == [HumanMessage(content="Should they get an SGLT2i?")]
+
+
+def test_condense_passes_first_turn_through_without_llm():
+    from langchain_core.messages import HumanMessage
+
+    from kdigo_guideline_rag.nodes import condense
+
+    state = {"original_question": "What is CKD?", "messages": [HumanMessage(content="What is CKD?")]}
+    with patch("kdigo_guideline_rag.nodes.get_llm", side_effect=AssertionError("no LLM on a first turn")):
+        out = condense(state)
+    assert out == {"standalone_question": "What is CKD?", "question": "What is CKD?"}
+
+
+def test_condense_rewrites_follow_up_from_history_excluding_current_turn():
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    from kdigo_guideline_rag.nodes import condense
+
+    seen = {}
+
+    class _LLM:
+        def invoke(self, messages):
+            seen["user"] = messages[-1][1]
+            return type(
+                "R", (), {"text": "Should a patient with eGFR 38 and A2 albuminuria get an SGLT2i?"}
+            )()
+
+    state = {
+        "original_question": "Should they get an SGLT2i?",
+        "messages": [
+            HumanMessage(content="My patient has eGFR 38 and A2 albuminuria."),
+            AIMessage(content="x" * 1000),
+            HumanMessage(content="Should they get an SGLT2i?"),
+        ],
+    }
+    with patch("kdigo_guideline_rag.nodes.get_llm", return_value=_LLM()):
+        out = condense(state)
+    assert (
+        out["question"]
+        == out["standalone_question"]
+        == "Should a patient with eGFR 38 and A2 albuminuria get an SGLT2i?"
+    )
+    history, latest = seen["user"].split("Latest message:")
+    assert "User: My patient has eGFR 38" in history
+    assert "Should they get an SGLT2i?" not in history  # current turn isn't history
+    assert "x" * 401 not in history  # earlier answers truncated
+    assert latest.strip() == "Should they get an SGLT2i?"
+
+
+def test_condense_history_window_keeps_only_recent_turns():
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    from kdigo_guideline_rag.nodes import CONDENSE_HISTORY_TURNS, _format_history
+
+    msgs = []
+    for i in range(CONDENSE_HISTORY_TURNS + 2):
+        msgs += [HumanMessage(content=f"q{i}"), AIMessage(content=f"a{i}")]
+    text = _format_history(msgs)
+    assert "User: q0" not in text and f"User: q{CONDENSE_HISTORY_TURNS + 1}" in text
+
+
+def test_generate_answers_the_standalone_question_and_appends_ai_message():
+    from langchain_core.messages import AIMessage
+
+    from kdigo_guideline_rag.nodes import generate
+
+    captured = {}
+
+    class _LLM:
+        def invoke(self, messages):
+            captured["user"] = messages[-1][1]
+            return type("R", (), {"text": "cited answer"})()
+
+    state = {
+        "question": "retrieval rewrite",
+        "original_question": "Should they get an SGLT2i?",
+        "standalone_question": "Should a patient with eGFR 38 get an SGLT2i?",
+        "graded_documents": _docs(1),
+    }
+    with (
+        patch("kdigo_guideline_rag.nodes.get_llm", return_value=_LLM()),
+        patch("kdigo_guideline_rag.nodes.reference_documents", return_value=()),
+    ):
+        out = generate(state, {"configurable": {}})
+    assert "Should a patient with eGFR 38 get an SGLT2i?" in captured["user"]
+    assert "retrieval rewrite" not in captured["user"]
+    assert out["messages"] == [AIMessage(content="cited answer")]

@@ -9,7 +9,7 @@ import os
 
 import streamlit as st
 from langgraph_sdk import get_sync_client
-from ui_helpers import GUIDELINE_FILTERS, pipeline_summary, sources_from_state
+from ui_helpers import GUIDELINE_FILTERS, interpreted_as, pipeline_summary, sources_from_state
 
 API_URL = os.environ.get("LANGGRAPH_API_URL", "http://127.0.0.1:2024")
 ASSISTANT_ID = "ckd_guideline_rag"
@@ -34,6 +34,8 @@ def render_turn(turn: dict, show_debug: bool) -> None:
     with st.chat_message("user"):
         st.markdown(turn["question"])
     with st.chat_message("assistant"):
+        if turn.get("interpreted_as"):
+            st.caption(f"Interpreted as: {turn['interpreted_as']}")
         st.markdown(turn["answer"])
         retrieved = [s for s in turn["sources"] if not s.reference]
         references = [s for s in turn["sources"] if s.reference]
@@ -65,8 +67,8 @@ with st.sidebar:
     st.divider()
     st.caption(
         "Answers come only from four indexed KDIGO guidelines (CKD 2024, AKI/AKD 2026 draft, "
-        "Glomerular 2021, BP in CKD 2021) and cite their sources. Each question is answered "
-        "independently — follow-ups don't yet see earlier turns. Not medical advice."
+        "Glomerular 2021, BP in CKD 2021) and cite their sources. Follow-ups use the conversation "
+        "for context; each answer is still built only from passages retrieved for it. Not medical advice."
     )
     st.caption(f"Server: `{API_URL}`")
 
@@ -101,6 +103,7 @@ if question := st.chat_input("Ask about CKD, AKI, glomerular disease, or BP in C
         "answer": state.get("answer", "(no answer returned)"),
         "sources": sources_from_state(state),
         "summary": pipeline_summary(state),
+        "interpreted_as": interpreted_as(state),
     }
     st.session_state.turns.append(turn)
     render_turn(turn, show_debug)

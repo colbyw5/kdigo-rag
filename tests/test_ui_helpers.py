@@ -60,10 +60,35 @@ def test_not_covered_answer_has_no_sources() -> None:
     assert sources_from_state({"answer": "not covered", "generation_documents": []}) == []
 
 
+def test_interpreted_as_only_for_condensed_follow_ups() -> None:
+    from app.ui_helpers import interpreted_as
+
+    assert (
+        interpreted_as({"original_question": "What is CKD?", "standalone_question": "What is CKD?"}) is None
+    )
+    follow_up = {
+        "original_question": "What about in children?",
+        "standalone_question": "What BP target for children with CKD?",
+    }
+    assert interpreted_as(follow_up) == "What BP target for children with CKD?"
+
+
 def test_pipeline_summary_shows_rewrite_only_when_it_happened() -> None:
     same = pipeline_summary(
-        {"question": "q", "original_question": "q", "documents": [1, 2], "graded_documents": [1]}
+        {
+            "question": "q",
+            "original_question": "q",
+            "standalone_question": "q",
+            "documents": [1, 2],
+            "graded_documents": [1],
+        }
     )
-    assert same["rewritten query"] is None and same["retrieved"] == 2
-    rewritten = pipeline_summary({"question": "better q", "original_question": "q"})
-    assert rewritten["rewritten query"] == "better q"
+    assert (
+        same["rewritten retrieval query"] is None
+        and same["interpreted as"] is None
+        and same["retrieved"] == 2
+    )
+    rewritten = pipeline_summary(
+        {"question": "better q", "original_question": "q", "standalone_question": "q"}
+    )
+    assert rewritten["rewritten retrieval query"] == "better q"

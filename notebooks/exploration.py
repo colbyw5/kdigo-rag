@@ -51,10 +51,15 @@ def _(mo):
 def _(graph, guideline_filter, mo, question, run_button, user_id):
     mo.stop(not run_button.value, mo.md("*Click **Ask** to run a query.*"))
 
+    from uuid import uuid4
+
+    # Fresh thread per Ask: the notebook inspects single queries (multi-turn
+    # testing is in the Streamlit app / Studio).
     config = {
         "configurable": {
             "guideline_filter": guideline_filter.value,
             "user_id": user_id.value,
+            "thread_id": f"notebook-{uuid4()}",
         }
     }
     result = graph.invoke({"question": question.value}, config=config)
@@ -64,7 +69,7 @@ def _(graph, guideline_filter, mo, question, run_button, user_id):
 @app.cell(hide_code=True)
 def _(mo, result):
     mo.md(f"""
-    ## Answer\n\n{result['answer']}
+    ## Answer\n\n{result["answer"]}
     """)
     return
 

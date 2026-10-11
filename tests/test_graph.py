@@ -36,7 +36,10 @@ def test_end_to_end_query_produces_cited_answer():
 
     graph = build_local_graph()
 
-    result = graph.invoke({"question": "Should a patient with G3b A2 CKD be on an SGLT2 inhibitor?"})
+    result = graph.invoke(
+        {"question": "Should a patient with G3b A2 CKD be on an SGLT2 inhibitor?"},
+        config={"configurable": {"thread_id": "pytest-e2e"}},
+    )
 
     assert result["answer"]
     assert "KDIGO" in result["answer"]
@@ -50,9 +53,15 @@ def test_user_context_persists_across_invocations_for_same_user():
 
     graph = build_local_graph()
 
-    config = {"configurable": {"user_id": "pytest-user"}}
-    graph.invoke({"question": "As a nephrology fellow, what is the CKD definition?"}, config=config)
-    second = graph.invoke({"question": "What about referral criteria?"}, config=config)
+    # Two *different* threads: user-context memory must cross conversations.
+    graph.invoke(
+        {"question": "As a nephrology fellow, what is the CKD definition?"},
+        config={"configurable": {"user_id": "pytest-user", "thread_id": "pytest-memory-1"}},
+    )
+    second = graph.invoke(
+        {"question": "What are the referral criteria for CKD?"},
+        config={"configurable": {"user_id": "pytest-user", "thread_id": "pytest-memory-2"}},
+    )
 
     assert "nephrology fellow" in second["user_context"]
 

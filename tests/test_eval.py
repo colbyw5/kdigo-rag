@@ -113,3 +113,29 @@ def test_any_of_satisfied_by_any_option() -> None:
         "| G3b | Moderately to severely decreased | 30-44 |",
         {"source_guideline": AKI, "label_type": "Table"},
     )
+
+
+def test_conversation_context_check_requires_and_forbids_terms() -> None:
+    from kdigo_guideline_rag.eval.conversations import CONVERSATIONS
+    from kdigo_guideline_rag.eval.multiturn import context_check
+
+    switch = next(c for c in CONVERSATIONS if c.kind == "switch")
+    assert context_check(switch, "What defines Stage 2 AKI?") == []
+    assert any(
+        "leaked" in p
+        for p in context_check(
+            switch, "For a G3b A2 patient on an SGLT2 inhibitor, what defines Stage 2 AKI?"
+        )
+    )
+    carry = next(c for c in CONVERSATIONS if c.id == "conv_bp_children")
+    assert context_check(carry, "What about in children?") != []  # lost the BP topic
+    assert context_check(carry, "What blood pressure target is recommended for children with CKD?") == []
+
+
+def test_conversations_are_well_formed() -> None:
+    from kdigo_guideline_rag.eval.conversations import CONVERSATIONS
+
+    assert len({c.id for c in CONVERSATIONS}) == len(CONVERSATIONS)
+    for c in CONVERSATIONS:
+        assert len(c.turns) >= 2, c.id
+        assert bool(c.needles) == (c.kind != "out_of_scope"), c.id

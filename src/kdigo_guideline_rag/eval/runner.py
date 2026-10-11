@@ -77,7 +77,10 @@ def retrieval_metrics(state: dict) -> tuple[int, int, int]:
 
 def _run_one(q: EvalQuestion) -> RunResult:
     """Invoke the graph for one question and score it."""
-    config = {"configurable": {"guideline_filter": "all", "user_id": f"eval-{q.id}"}}
+    # One thread per question: each eval question is a fresh, single-turn conversation.
+    config = {
+        "configurable": {"guideline_filter": "all", "user_id": f"eval-{q.id}", "thread_id": f"eval-{q.id}"}
+    }
     result = graph.invoke({"question": q.question}, config=config)
     graded = result["graded_documents"]
     citations = [

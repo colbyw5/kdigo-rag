@@ -6,6 +6,7 @@ Usage:
     python -m kdigo_guideline_rag.eval verify      # every needle exists in the index
     python -m kdigo_guideline_rag.eval judge [--run PATH]   # tier 3 on a saved pipeline run (default: latest)
     python -m kdigo_guideline_rag.eval judge-check --run PATH-judged.json   # judge must catch corrupted answers
+    python -m kdigo_guideline_rag.eval conversations [--split dev|heldout|all]   # multi-turn final-turn scoring
 
 Defaults to the dev split: run heldout only to confirm a decision already
 made on dev.
@@ -23,7 +24,9 @@ from kdigo_guideline_rag.eval.questions import EVAL_QUESTIONS
 def main() -> int:
     """Parse arguments, run the requested tier, return a process exit code."""
     parser = argparse.ArgumentParser(prog="python -m kdigo_guideline_rag.eval")
-    parser.add_argument("tier", choices=["retrieval", "pipeline", "verify", "judge", "judge-check"])
+    parser.add_argument(
+        "tier", choices=["retrieval", "pipeline", "verify", "judge", "judge-check", "conversations"]
+    )
     parser.add_argument("--run", type=Path, default=None, help="judge: saved run file (default: latest)")
     parser.add_argument("--split", choices=["dev", "heldout", "all"], default="dev")
     parser.add_argument("--k", type=int, default=5)
@@ -37,10 +40,11 @@ def main() -> int:
         from kdigo_guideline_rag.ingest.embed import get_vectorstore
 
         collection = get_vectorstore(reset=False).get(include=["documents", "metadatas"])
-        problems = verify_needles(
-            zip(collection["documents"], collection["metadatas"], strict=True), EVAL_QUESTIONS
-        )
-        print("\n".join(problems) or f"all needles verified ({sum(len(q.needles) for q in EVAL_QUESTIONS)})")
+        from kdigo_guideline_rag.eval.conversations import CONVERSATIONS
+
+        cases = [*EVAL_QUESTIONS, *CONVERSATIONS]
+        problems = verify_needles(zip(collection["documents"], collection["metadatas"], strict=True), cases)
+        print("\n".join(problems) or f"all needles verified ({sum(len(c.needles) for c in cases)})")
         from kdigo_guideline_rag.nodes import reference_documents
 
         try:
@@ -56,6 +60,15 @@ def main() -> int:
         if args.run is None:
             raise SystemExit("judge-check needs --run PATH to a *-judged.json file")
         print(perturbation_check(args.run))
+        return 0
+
+    if args.tier == "conversations":
+        from kdigo_guideline_rag.eval.conversations import CONVERSATIONS
+        from kdigo_guideline_rag.eval.multiturn import run_conversations
+
+        run_conversations(
+            [c for c in CONVERSATIONS if args.split == "all" or c.split == args.split], split=args.split
+        )
         return 0
 
     if args.tier == "judge":

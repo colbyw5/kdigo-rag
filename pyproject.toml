@@ -37,6 +37,7 @@ eval = "python -m kdigo_guideline_rag.eval pipeline"
 eval-retrieval = "python -m kdigo_guideline_rag.eval retrieval"
 eval-verify = "python -m kdigo_guideline_rag.eval verify"
 eval-judge = "python -m kdigo_guideline_rag.eval judge"
+eval-conversations = "python -m kdigo_guideline_rag.eval conversations"
 
 [tool.pixi.dependencies]
 python = "3.11.*"

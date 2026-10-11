@@ -6,12 +6,15 @@ from functools import lru_cache
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.documents import Document
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 
 from kdigo_guideline_rag.configuration import GUIDELINE_FILTER_MAP, REFERENCE_PASSAGES, Configuration
 from kdigo_guideline_rag.ingest.embed import get_vectorstore
 from kdigo_guideline_rag.prompts import (
+    CONDENSE_SYSTEM_PROMPT,
+    CONDENSE_USER_PROMPT,
     GENERATE_SYSTEM_PROMPT,
     GENERATE_USER_PROMPT,
     GRADE_SYSTEM_PROMPT,
@@ -27,6 +30,10 @@ logger = logging.getLogger(__name__)
 MODEL = "claude-sonnet-5"
 TOP_K = 5
 MAX_REWRITES = 1
+# Conversation turns the condense step sees, and how much of each earlier answer
+# (the first lines are enough to know what a follow-up refers to).
+CONDENSE_HISTORY_TURNS = 3
+CONDENSE_ANSWER_CHARS = 400
 
 
 class GradeResult(BaseModel):
@@ -99,8 +106,55 @@ def format_context(docs: list[Document]) -> str:
 
 
 def prepare(state: GraphState) -> dict:
-    """Initialize bookkeeping fields so callers only need to supply ``question``."""
-    return {"original_question": state["question"], "rewrite_count": 0}
+    """Start a turn: record the user's message and reset per-turn bookkeeping.
+
+    Callers only supply ``question``. Per-turn fields are reset here because a
+    thread's checkpointed state carries over from the previous turn.
+    """
+    return {
+        "original_question": state["question"],
+        "standalone_question": state["question"],
+        "rewrite_count": 0,
+        "messages": [HumanMessage(content=state["question"])],
+    }
+
+
+def _format_history(messages: list[AnyMessage]) -> str:
+    lines = []
+    for m in messages[-2 * CONDENSE_HISTORY_TURNS :]:
+        if isinstance(m, HumanMessage):
+            lines.append(f"User: {m.content}")
+        elif isinstance(m, AIMessage):
+            text = m.content if isinstance(m.content, str) else str(m.content)
+            lines.append(
+                f"Assistant: {text[:CONDENSE_ANSWER_CHARS]}{'...' if len(text) > CONDENSE_ANSWER_CHARS else ''}"
+            )
+    return "\n".join(lines)
+
+
+def condense(state: GraphState) -> dict:
+    """Make a follow-up self-contained using the conversation so far.
+
+    First turns pass through with no LLM call. Follow-ups ("Should they get an
+    SGLT2i?") are rewritten into a standalone question carrying only the
+    context they depend on; that question drives retrieval, grading, and the
+    answer. The answer itself still sees only this turn's passages (not
+    earlier answers), so every answer stays grounded in its own citations.
+    """
+    history = state["messages"][:-1]  # everything before this turn's question
+    if not history:
+        return {"standalone_question": state["original_question"], "question": state["original_question"]}
+    messages = [
+        ("system", CONDENSE_SYSTEM_PROMPT),
+        (
+            "user",
+            CONDENSE_USER_PROMPT.format(
+                history=_format_history(history), question=state["original_question"]
+            ),
+        ),
+    ]
+    standalone = get_llm().invoke(messages).text.strip() or state["original_question"]
+    return {"standalone_question": standalone, "question": standalone}
 
 
 def retrieve(state: GraphState, config: RunnableConfig) -> dict:
@@ -168,10 +222,8 @@ def generate(state: GraphState, config: RunnableConfig) -> dict:
     """
     if not state["graded_documents"]:
         cfg = Configuration.from_runnable_config(config)
-        return {
-            "answer": NOT_COVERED_RESPONSE.format(searched=_searched_guidelines(cfg)),
-            "generation_documents": [],
-        }
+        answer = NOT_COVERED_RESPONSE.format(searched=_searched_guidelines(cfg))
+        return {"answer": answer, "generation_documents": [], "messages": [AIMessage(content=answer)]}
     graded = state["graded_documents"]
     docs = graded + [
         ref for ref in reference_documents() if ref.page_content not in {d.page_content for d in graded}
@@ -183,13 +235,19 @@ def generate(state: GraphState, config: RunnableConfig) -> dict:
             "user",
             GENERATE_USER_PROMPT.format(
                 user_context=state.get("user_context") or "(none learned yet)",
-                question=state.get("original_question") or state["question"],
+                question=state.get("standalone_question")
+                or state.get("original_question")
+                or state["question"],
                 context=context,
             ),
         ),
     ]
     response = get_llm().invoke(messages)
-    return {"answer": response.text, "generation_documents": docs}
+    return {
+        "answer": response.text,
+        "generation_documents": docs,
+        "messages": [AIMessage(content=response.text)],
+    }
 
 
 def rewrite(state: GraphState) -> dict:
