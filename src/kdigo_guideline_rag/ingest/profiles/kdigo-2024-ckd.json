@@ -1,0 +1,47 @@
+{
+  "name": "KDIGO 2024 CKD Evaluation and Management",
+  "pdf_files": [
+    "KDIGO-2024-CKD-Guideline.pdf"
+  ],
+  "profile": {
+    "recommendation_pattern": "(?P<label>Recommendation|Practice Point) (?P<number>\\d+(?:\\.\\d+)+):(?=\\s*[A-Z])",
+    "grade_pattern": "(?i)\\((\\d[A-D]|Not Graded)\\)",
+    "chapter_pattern": "(?i)^CHAPTER\\s+",
+    "ignore_heading_pattern": null,
+    "heading_fallback_pattern": "^(?P<number>\\d+(?:\\.\\d+)*)\\.?\\s+(?P<title>[A-Z][^\\n]*)$",
+    "reference_heading_pattern": "(?i)^(?:\\d+(?:\\.\\d+)*\\.?\\s+)?(references?|bibliography|works\\s+cited|literature\\s+cited|reference\\s+list)\\s*:?\\s*$",
+    "recommendation_label": null,
+    "recommendation_extractor": "text_layer",
+    "repair_split_ligatures": true,
+    "repair_missing_spaces": true,
+    "noise_patterns": [],
+    "text_substitutions": "KI_TEXT_SUBSTITUTIONS",
+    "char_replacements": "KI_SYMBOL_FONT_MAP"
+  },
+  "decided_by": {
+    "method": "hand configuration + reviewed onboarding-agent findings (2026-10-13)",
+    "review": "Glyph rules ($ >=, # <=, dagger >=, only before numbers) and text-layer repair adopted from the agent across Kidney International documents; agent's disabled heading fallback and simplified chapter/grade patterns rejected. Agent: require a capital letter after the colon (precision guard).",
+    "scorecard": {
+      "passed": true,
+      "problems": 0.1,
+      "per_pdf": [
+        {
+          "pdf": "KDIGO-2024-CKD-Guideline.pdf",
+          "passed": true,
+          "problems": 0.1,
+          "recommendations": 169,
+          "text_layer_recommendations": 169,
+          "missing_vs_text_layer": [],
+          "numbering_gaps": [],
+          "unconfirmed_gaps": [],
+          "truncated": [],
+          "not_verbatim": [],
+          "artifacts": {},
+          "glyph_suspects": {},
+          "tiny_fragments": 5,
+          "examples": {}
+        }
+      ]
+    }
+  }
+}

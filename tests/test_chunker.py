@@ -321,9 +321,14 @@ def test_ki_symbol_font_glyphs_fixed_in_text_and_tables():
     double dagger, <= as a pound sign, bullets as \\x0f). Clinical thresholds
     must reach the index intact, in prose and tables alike.
     """
-    from kdigo_guideline_rag.ingest.sources import KI_SYMBOL_FONT_MAP
+    from kdigo_guideline_rag.ingest.sources import KI_SYMBOL_FONT_MAP, KI_TEXT_SUBSTITUTIONS
 
-    ki_source = GuidelineSource(name="KI", pdf_path="unused.pdf", char_replacements=KI_SYMBOL_FONT_MAP)
+    ki_source = GuidelineSource(
+        name="KI",
+        pdf_path="unused.pdf",
+        char_replacements=KI_SYMBOL_FONT_MAP,
+        text_substitutions=KI_TEXT_SUBSTITUTIONS,
+    )
     doc = _FakeDoc(
         [
             (_item("text", "\x0f Confirm ACR ‡ 30 mg/g with SBP target £ 120 mm Hg (n ¼ 2646)."), 1),
@@ -673,3 +678,81 @@ def test_duplicate_figure_keeps_first_occurrence(source):
     (chunk,) = chunk_document(doc, source)
 
     assert chunk.page == 64
+
+
+def test_context_glyphs_only_change_before_numbers():
+    """'$' / '#' / dagger mean >= / <= / >= only before a number; prices, URL
+    fragments and real footnote daggers are left alone."""
+    from kdigo_guideline_rag.ingest.sources import KI_TEXT_SUBSTITUTIONS
+
+    ki = GuidelineSource(name="KI", pdf_path="unused.pdf", text_substitutions=KI_TEXT_SUBSTITUTIONS)
+    text = "ACR $ 30 and $75 years; weight # 60 kg; eGFR ‡ 20. Price $1,571; see #1684867542809; ‡ de Galan."
+    (chunk,) = chunk_document(_FakeDoc([(_item("text", text), 1)]), ki)
+    assert chunk.text == (
+        "ACR ≥ 30 and ≥75 years; weight ≤ 60 kg; eGFR ≥ 20. Price $1,571; see #1684867542809; ‡ de Galan."
+    )
+
+
+def test_lead_in_recommendation_absorbs_following_figure(source):
+    doc = _FakeDoc(
+        [
+            (_item("section_header", "2.4 Special situations"), 1),
+            (_item("text", "Practice Point 2.4.3: IgAN with RPGN:"), 1),
+            (_FakePicture([_item("text", f"step{i}") for i in range(8)], caption="Figure 20| RPGN"), 1),
+            (_item("text", "Practice Point 2.4.4: IgAN and pregnancy planning."), 1),
+            (_FakePicture([_item("text", f"x{i}") for i in range(8)], caption="Figure 21| Other"), 1),
+        ]
+    )
+    chunks = chunk_document(doc, source)
+
+    assert [c.label_type for c in chunks] == ["Practice Point", "Practice Point", "Figure"]
+    assert chunks[0].text.startswith("Practice Point 2.4.3: IgAN with RPGN:\n\nFigure 20| RPGN")
+    assert chunks[2].text.startswith("Figure 21|")  # 2.4.4 isn't a lead-in, so its figure stays separate
+
+
+def test_lead_in_recommendation_absorbs_its_bullet_list(source):
+    doc = _FakeDoc(
+        [
+            (_item("section_header", "2.1 Diagnosis"), 1),
+            (_item("text", "Practice Point 2.1.1: Considerations for the diagnosis of IgAN:"), 1),
+            (_item("list_item", "• IgAN can only be diagnosed with a kidney biopsy."), 1),
+            (_item("list_item", "• Determine the MEST-C score."), 1),
+            (
+                _item(
+                    "text",
+                    "Rationale paragraph that is not part of the list and is long enough to stand alone here.",
+                ),
+                1,
+            ),
+        ]
+    )
+    chunks = chunk_document(doc, source)
+
+    assert chunks[0].text == (
+        "Practice Point 2.1.1: Considerations for the diagnosis of IgAN:\n"
+        "• IgAN can only be diagnosed with a kidney biopsy.\n• Determine the MEST-C score."
+    )
+    assert chunks[1].text.startswith("Rationale paragraph")
+
+
+def test_headings_merged_into_recommendation_items_update_the_section(source):
+    """Docling merges numbered headings into neighbouring items (KDIGO AKI draft):
+    leading ones and trailing ones must become section changes, not rec text."""
+    doc = _FakeDoc(
+        [
+            (_item("section_header", "CHAPTER 2. AKI PREDICTION"), 1),
+            (
+                _item(
+                    "text",
+                    "2.2. Electronic AKI alerts Recommendation 2.2.1: We recommend against alerts in isolation ( 1B ). 2.3. Kidney functional testing",
+                ),
+                1,
+            ),
+            (_item("text", "Practice Point 2.3.1: Assessment of kidney functional reserve may help."), 1),
+        ]
+    )
+    rec, pp = chunk_document(doc, source)
+
+    assert rec.text == "Recommendation 2.2.1: We recommend against alerts in isolation ( 1B )."
+    assert rec.section == "2.2. Electronic AKI alerts"
+    assert pp.section == "2.3. Kidney functional testing"

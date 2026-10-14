@@ -1,0 +1,60 @@
+{
+  "name": "KDIGO 2026 AKI/AKD (Public Review Draft)",
+  "pdf_files": [
+    "KDIGO-2026-AKI-AKD-Guideline-Public-Review-Draft-March-2026.pdf"
+  ],
+  "profile": {
+    "recommendation_pattern": "(?<![\\w(])(?P<label>Recommendation|Practice Point):?\\s+(?P<number>\\d+(?:\\.\\d+)+)\\.?:",
+    "grade_pattern": "(?i)\\((\\d[A-D]|Not Graded)\\)",
+    "chapter_pattern": "(?i)^CHAPTER\\s+",
+    "ignore_heading_pattern": null,
+    "heading_fallback_pattern": "^(?P<number>\\d+(?:\\.\\d+)*)\\.?\\s+(?P<title>[A-Z][^\\n]*)$",
+    "reference_heading_pattern": "(?i)^(?:\\d+(?:\\.\\d+)*\\.?\\s+)?(references?|bibliography|works\\s+cited|literature\\s+cited|reference\\s+list)\\s*:?\\s*$",
+    "recommendation_label": null,
+    "recommendation_extractor": "text_layer",
+    "repair_split_ligatures": true,
+    "repair_missing_spaces": true,
+    "noise_patterns": [
+      "\\bDRAFT\\b",
+      "^\\d{1,3}$"
+    ],
+    "text_substitutions": [],
+    "char_replacements": {}
+  },
+  "decided_by": {
+    "method": "hand configuration + reviewed onboarding-agent findings (2026-10-13)",
+    "review": "Glyph rules ($ >=, # <=, dagger >=, only before numbers) and text-layer repair adopted from the agent across Kidney International documents; agent's disabled heading fallback and simplified chapter/grade patterns rejected. Agent: tolerate source typos 'Practice Point: 5.2.2:' and '3.12.2.1.:' (+2 practice points), skip '(Practice Point' cross-references; drop bare page numbers.",
+    "scorecard": {
+      "passed": false,
+      "problems": 18.04,
+      "per_pdf": [
+        {
+          "pdf": "KDIGO-2026-AKI-AKD-Guideline-Public-Review-Draft-March-2026.pdf",
+          "passed": false,
+          "problems": 18.04,
+          "recommendations": 193,
+          "text_layer_recommendations": 193,
+          "missing_vs_text_layer": [],
+          "numbering_gaps": [],
+          "unconfirmed_gaps": [],
+          "truncated": [
+            "Practice Point 1.6.1.1",
+            "Practice Point 3.11.3",
+            "Practice Point 4.2.1",
+            "Practice Point 4.7.1"
+          ],
+          "not_verbatim": [],
+          "artifacts": {},
+          "glyph_suspects": {},
+          "tiny_fragments": 2,
+          "examples": {
+            "truncated": [
+              "ice Point 1.6.1.1: Age specific references ranges should be used when serum cystatin C is used to detect AKI in children",
+              "eratures, consider heat injury as a cause of AKI. 3.12 Considerations specific in children 3.12.1 Hemodynamic management"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

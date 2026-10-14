@@ -31,6 +31,7 @@ test-integration = "pytest -m integration"
 lint = "ruff check ."
 fmt = "ruff format ."
 ingest = { cmd = "python -m kdigo_guideline_rag.ingest", env = { TORCH_COMPILE_DISABLE = "1", PYTORCH_JIT = "0" } }
+onboard = { cmd = "python -m kdigo_guideline_rag.ingest.onboard", env = { TORCH_COMPILE_DISABLE = "1", PYTORCH_JIT = "0" } }
 explore = "marimo edit notebooks/exploration.py"
 dev = "langgraph dev"
 eval = "python -m kdigo_guideline_rag.eval pipeline"

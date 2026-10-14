@@ -28,10 +28,9 @@ from difflib import SequenceMatcher
 from docling_core.types.doc.document import DoclingDocument
 
 from kdigo_guideline_rag.ingest.sources import GuidelineSource
+from kdigo_guideline_rag.ingest.text_layer import is_valid_start, is_verbatim, text_layer_recommendations
 from kdigo_guideline_rag.ingest.text_repair import repair_missing_spaces, repair_split_ligatures
 
-GRADE_PATTERN = re.compile(r"\((\d[A-D]|Not Graded)\)", re.IGNORECASE)
-CHAPTER_PATTERN = re.compile(r"^CHAPTER\s+", re.IGNORECASE)
 CAPTION_ONLY_PATTERN = re.compile(r"^(Figure|Table)\s+\d+\s*\|", re.IGNORECASE)
 # Generic figure-caption shape ("Figure 48|", "Fig. 3.", "Figure 2A:") -- not
 # tied to Kidney International's "Figure N|" house style.
@@ -51,8 +50,12 @@ CITATION_ENTRY_PATTERN = re.compile(
 REFERENCE_DENSITY_THRESHOLD = 2
 
 # ASCII control characters (except tab/newline) left over after any
-# source-specific glyph fixes -- never meaningful in guideline text.
-CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+# source-specific glyph fixes, plus zero-width characters -- never meaningful
+# in guideline text.
+CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\u200b\u200c\u200d\u2060\ufeff]")
+# Soft hyphen (Diabetes Care typesetting: "al\u00ad buminuria"), with any
+# whitespace it left behind -- a line-break hint, never part of a word.
+SOFT_HYPHEN_PATTERN = re.compile(r"\u00ad\s*")
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +115,9 @@ def _fix_chars(text: str, source: GuidelineSource) -> str:
     """
     if source.char_replacements:
         text = text.translate(str.maketrans(source.char_replacements))
-    text = CONTROL_CHAR_PATTERN.sub("", text)
+    for pattern, replacement in source.text_substitutions:
+        text = pattern.sub(replacement, text)
+    text = CONTROL_CHAR_PATTERN.sub("", SOFT_HYPHEN_PATTERN.sub("", text))
     if source.repair_split_ligatures:
         text = repair_split_ligatures(text)
     if source.repair_missing_spaces:
@@ -134,8 +139,12 @@ def _split_narrative(text: str, source: GuidelineSource) -> list[str]:
     return [" ".join(words[i : i + source.narrative_chunk_size]) for i in range(0, len(words), step)]
 
 
-def _update_heading(text: str, chapter: str | None, section: str | None) -> tuple[str | None, str | None]:
-    if CHAPTER_PATTERN.match(text):
+def _update_heading(
+    text: str, chapter: str | None, section: str | None, source: GuidelineSource
+) -> tuple[str | None, str | None]:
+    if source.ignore_heading_pattern and source.ignore_heading_pattern.fullmatch(text):
+        return chapter, section
+    if source.chapter_pattern and source.chapter_pattern.match(text):
         return text, None
     return chapter, text
 
@@ -171,6 +180,170 @@ def _dedupe_recommendations(chunks: list[Chunk]) -> list[Chunk]:
             seen.add(key)
         deduped.append(chunk)
     return deduped
+
+
+def _number_key(number: str) -> tuple:
+    """Sortable key for "3.7.1" / "11.6b" style numbers."""
+    return tuple((int(d), letter) for d, letter in re.findall(r"(\d+)([a-z]?)", number))
+
+
+SAME_START_CHARS = 80  # normalized chars two readings must share to count as the same recommendation
+
+
+def _merge_text_layer(chunks: list[Chunk], source: GuidelineSource) -> tuple[list[Chunk], dict[str, int]]:
+    """Repair recommendations from the PDF text layer (``recommendation_extractor="text_layer"``).
+
+    Docling stays the structure (order, chapter/section, tables, figures,
+    narrative); the text layer supplies recommendation *text* where Docling's
+    is broken:
+
+    - **replace** a recommendation when the text-layer copy is a continuation
+      of Docling's text (Docling cut it at a column/page break, or split its
+      list items off) -- never with a different reading;
+    - **insert** recommendations Docling never started, after the last segment
+      on the same or an earlier page (inheriting its chapter/section);
+    - **drop** narrative fragments that are pieces of a recommendation
+      ("itor therapy.") -- they'd otherwise be indexed as junk.
+
+    Never overwrites a complete Docling recommendation with different text.
+    """
+    # Text-layer text gets the same glyph fixes / repairs / noise removal as
+    # Docling's -- without this, recommendations it supplied skipped them.
+    found = {
+        key: replace(
+            tl, text=_split_heading_tail(_strip_noise(_fix_chars(tl.text, source), source), source)[0]
+        )
+        for key, tl in text_layer_recommendations(source).items()
+    }
+    stats = {"replaced": 0, "inserted": 0, "fragments_dropped": 0}
+    seen: set[tuple[str | None, str]] = set()
+    merged: list[Chunk] = []
+    for chunk in chunks:
+        if chunk.label_type and chunk.recommendation_number:
+            key = (chunk.label_type, chunk.recommendation_number)
+            seen.add(key)
+            tl = found.get(key)
+            # Replace only when both read the *same* recommendation -- judged by
+            # its opening. Where columns interleave, the text layer can read a
+            # different column right after the label ("Practice Point 3.10.1:
+            # bicarbonate < 18 mmol/l in adults)"); that must never overwrite
+            # Docling. Truncation or a glued-on table footnote shares the opening.
+            dl_key, tl_key = _narrative_key(chunk.text), _narrative_key(tl.text) if tl else ""
+            same_start = bool(tl) and tl_key[:SAME_START_CHARS] == dl_key[:SAME_START_CHARS]
+            # ...and prefer the reading that actually exists in the PDF. If
+            # Docling's copy is verbatim, only *extend* it (never shorten: AKI Rec
+            # 4.11.1's box goes on to import a CKD practice point). If it isn't
+            # verbatim -- Docling glued on text from elsewhere, e.g. a table
+            # footnote -- take the verbatim text-layer copy even when shorter.
+            if (
+                same_start
+                and tl.text != chunk.text
+                and (
+                    len(tl_key) > len(dl_key)
+                    if is_verbatim(chunk.text, source)
+                    else is_verbatim(tl.text, source)
+                )
+            ):
+                grade = source.grade_pattern.search(tl.text) if source.grade_pattern else None
+                chunk = replace(chunk, text=tl.text, grade=grade.group(1) if grade else chunk.grade)
+                stats["replaced"] += 1
+        merged.append(chunk)
+
+    for key, tl in sorted(found.items(), key=lambda kv: _number_key(kv[0][1])):
+        if key in seen:
+            continue
+        anchor = max(
+            (i for i, c in enumerate(merged) if c.page is not None and c.page <= tl.page), default=None
+        )
+        ctx = merged[anchor] if anchor is not None else None
+        grade = source.grade_pattern.search(tl.text) if source.grade_pattern else None
+        new = Chunk(
+            text=tl.text,
+            source_guideline=source.name,
+            chapter=ctx.chapter if ctx else None,
+            section=ctx.section if ctx else None,
+            label_type=tl.label,
+            recommendation_number=tl.number,
+            grade=grade.group(1) if grade else None,
+            page=tl.page,
+        )
+        merged.insert((anchor + 1) if anchor is not None else 0, new)
+        stats["inserted"] += 1
+
+    recs = [(_narrative_key(c.text), c.page) for c in merged if c.label_type and c.recommendation_number]
+    kept = []
+    for chunk in merged:
+        key = _narrative_key(chunk.text)
+        if chunk.label_type is None and len(key) >= 8:
+            pages = [page for rec_key, page in recs if key in rec_key]
+            # Short segments only count as fragments next to their recommendation:
+            # "itor therapy." beside its box is a fragment; "Pediatric considerations."
+            # merely appearing in some recommendation elsewhere is a coincidence.
+            if pages and (len(chunk.text.split()) >= 3 or chunk.page in pages):
+                stats["fragments_dropped"] += 1
+                continue
+        kept.append(chunk)
+    return kept, stats
+
+
+LEAD_IN = re.compile(r":\s*$")
+# A list item's opening: a bullet glyph, or an enumerator "(i)" / "a." / "2)".
+LIST_ITEM = re.compile(
+    r"^\s*(?:[\u2022\u00b7\u25aa\u25cf\u2013\u2014-]|\((?:[ivx]+|[a-z]|\d{1,2})\)|(?:[a-z]|\d{1,2})[.)])\s"
+)
+LEAD_IN_MAX_WORDS = 450
+
+
+def _follows(lead: Chunk, nxt: Chunk) -> bool:
+    """Same chapter/section, and on the same or the next page."""
+    return (nxt.chapter, nxt.section) == (lead.chapter, lead.section) and (
+        lead.page is None or nxt.page is None or 0 <= nxt.page - lead.page <= 1
+    )
+
+
+def _attach_lead_in_content(chunks: list[Chunk]) -> tuple[list[Chunk], int]:
+    """Give a recommendation that ends on a lead-in ("Practice Point 2.4.3: IgAN
+    with RPGN:", "...in descending order of preference):") the content that
+    follows it, so the label and the guidance are retrieved together:
+
+    - the immediately following figure/table (its content is a box or chart), or
+    - the consecutive bullet / numbered list items after it (Docling emits each
+      as its own item).
+
+    Same chapter/section only, at most one page later, capped at
+    ``LEAD_IN_MAX_WORDS``. Absorbed segments are removed, not duplicated, so
+    they don't compete for top-k slots.
+    """
+    out: list[Chunk] = []
+    attached = 0
+    i = 0
+    while i < len(chunks):
+        chunk = chunks[i]
+        i += 1
+        if not (chunk.label_type in ("Recommendation", "Practice Point") and LEAD_IN.search(chunk.text)):
+            out.append(chunk)
+            continue
+
+        parts, separator = [chunk.text], "\n"
+        if i < len(chunks) and chunks[i].label_type in ("Figure", "Table") and _follows(chunk, chunks[i]):
+            parts.append(chunks[i].text)
+            separator = "\n\n"
+            i += 1
+        else:
+            words = len(chunk.text.split())
+            while (
+                i < len(chunks)
+                and chunks[i].label_type is None
+                and LIST_ITEM.match(chunks[i].text)
+                and _follows(chunk, chunks[i])
+                and words + len(chunks[i].text.split()) <= LEAD_IN_MAX_WORDS
+            ):
+                parts.append(chunks[i].text)
+                words += len(chunks[i].text.split())
+                i += 1
+        attached += len(parts) > 1
+        out.append(replace(chunk, text=separator.join(parts)))
+    return out, attached
 
 
 def _dedupe_tables(chunks: list[Chunk]) -> tuple[list[Chunk], int]:
@@ -386,7 +559,13 @@ def chunk_document(doc: DoclingDocument, source: GuidelineSource) -> list[Chunk]
         reading order.
     """
     segments, coverage = _extract_segments(doc, source)
+    if source.recommendation_extractor == "text_layer":
+        segments, tl_stats = _merge_text_layer(segments, source)
+        logger.info("%s: text-layer recommendations -- %s", source.name, tl_stats)
     segments = _dedupe_recommendations(segments)
+    segments, lead_ins = _attach_lead_in_content(segments)
+    if lead_ins:
+        logger.info("%s: attached %d figures/tables to lead-in recommendations", source.name, lead_ins)
     segments, tables_dropped = _dedupe_tables(segments)
     narrative_before = sum(c.label_type is None for c in segments)
     segments, dropped = _dedupe_narrative(segments, source)
@@ -472,6 +651,54 @@ def _figure_chunks(
     ]
 
 
+HEADING_MAX_WORDS = 20
+
+
+def _is_fallback_heading(text: str, source: GuidelineSource) -> bool:
+    """A numbered heading Docling didn't tag as one: matches the source's
+    fallback pattern, is short, and contains no recommendation -- otherwise an
+    item like "2.2. Electronic AKI alerts Recommendation 2.2.1: ..." (Docling
+    merges headings into items) would be swallowed as one long "heading".
+    """
+    return (
+        source.heading_fallback_pattern is not None
+        and len(text.split()) <= HEADING_MAX_WORDS
+        and source.heading_fallback_pattern.fullmatch(text) is not None
+        and not (source.recommendation_pattern and source.recommendation_pattern.search(text))
+    )
+
+
+# A trailing numbered heading: after a sentence end, or -- when the number has
+# its own trailing dot ("1.6.2. Determination of ..."), distinctive enough --
+# after anything. A bare "2.3 Kidney" mid-prose still needs a sentence end.
+HEADING_TAIL = re.compile(
+    r"(?:^|(?<=[.)\]])\s+|\s+(?=\d+(?:\.\d+)+\.\s))(\d+(?:\.\d+)+\.?\s+[A-Z][^.!?:;]{2,100})$"
+)
+
+
+def _split_heading_tail(text: str, source: GuidelineSource) -> tuple[str, list[str]]:
+    """Split numbered headings off the end of ``text`` (or ``text`` that *is* one).
+
+    Repeats, since Docling can glue several in a row ("... of AKI. 1.6.
+    Considerations specific to children 1.6.1. Definition of AKI"); headings
+    are returned in reading order. Only with a ``heading_fallback_pattern``
+    (sources whose recommendations start with a bare number turn it off), and
+    only tails that pass :func:`_is_fallback_heading`.
+    """
+    headings: list[str] = []
+    if not source.heading_fallback_pattern:
+        return text, headings
+    while text:
+        if _is_fallback_heading(text, source):
+            return "", [text, *headings]
+        tail = HEADING_TAIL.search(text)
+        if not (tail and _is_fallback_heading(tail.group(1), source)):
+            break
+        headings.insert(0, tail.group(1).strip())
+        text = text[: tail.start()].rstrip()
+    return text, headings
+
+
 def _extract_segments(doc: DoclingDocument, source: GuidelineSource) -> tuple[list[Chunk], FigureCoverage]:
     """Walk Docling items in reading order, emitting one segment per
     recommendation anchor, table, figure, or narrative item (before dedupe/packing).
@@ -532,7 +759,7 @@ def _extract_segments(doc: DoclingDocument, source: GuidelineSource) -> tuple[li
                 source.recommendation_pattern and source.recommendation_pattern.search(stripped)
             )
             if not is_mislabeled_recommendation:
-                chapter, section = _update_heading(stripped, chapter, section)
+                chapter, section = _update_heading(stripped, chapter, section, source)
                 in_references = False
                 continue
             in_references = False
@@ -552,8 +779,8 @@ def _extract_segments(doc: DoclingDocument, source: GuidelineSource) -> tuple[li
 
         # Docling sometimes tags a numbered subsection heading as a plain
         # text/list_item instead of section_header (varies by document).
-        if source.heading_fallback_pattern and source.heading_fallback_pattern.fullmatch(text):
-            chapter, section = _update_heading(text, chapter, section)
+        if _is_fallback_heading(text, source):
+            chapter, section = _update_heading(text, chapter, section, source)
             continue
 
         if source.reference_heading_pattern and source.reference_heading_pattern.match(text):
@@ -568,7 +795,7 @@ def _extract_segments(doc: DoclingDocument, source: GuidelineSource) -> tuple[li
         page = prov[0].page_no if prov else None
 
         pattern = source.recommendation_pattern
-        matches = list(pattern.finditer(text)) if pattern else []
+        matches = [m for m in pattern.finditer(text) if is_valid_start(text, m, source)] if pattern else []
 
         if not matches:
             for piece in _split_narrative(text, source):
@@ -587,6 +814,10 @@ def _extract_segments(doc: DoclingDocument, source: GuidelineSource) -> tuple[li
 
         if matches[0].start() > 0:
             leading = text[: matches[0].start()].strip()
+            # Docling merges headings into neighbouring items ("1.2. Staging of AKI
+            # Practice Point 1.2.1: ..."): a heading here updates the section
+            # instead of becoming a stray narrative chunk.
+            leading, headings = _split_heading_tail(leading, source)
             if leading:
                 chunks.append(
                     Chunk(
@@ -597,22 +828,29 @@ def _extract_segments(doc: DoclingDocument, source: GuidelineSource) -> tuple[li
                         page=page,
                     )
                 )
+            for heading in headings:
+                chapter, section = _update_heading(heading, chapter, section, source)
 
         for i, match in enumerate(matches):
             end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
             chunk_text = text[match.start() : end].strip()
-            grade_match = GRADE_PATTERN.search(chunk_text)
+            # ...and a heading glued after a recommendation ("...(1B). 2.3. Kidney
+            # functional testing") belongs to what follows, not to the recommendation.
+            chunk_text, headings = _split_heading_tail(chunk_text, source)
+            grade_match = source.grade_pattern.search(chunk_text) if source.grade_pattern else None
             chunks.append(
                 Chunk(
                     text=chunk_text,
                     source_guideline=source.name,
                     chapter=chapter,
                     section=section,
-                    label_type=match.group("label"),
+                    label_type=match.groupdict().get("label") or source.recommendation_label,
                     recommendation_number=match.group("number"),
                     grade=grade_match.group(1) if grade_match else None,
                     page=page,
                 )
             )
+            for heading in headings:
+                chapter, section = _update_heading(heading, chapter, section, source)
 
     return chunks, coverage

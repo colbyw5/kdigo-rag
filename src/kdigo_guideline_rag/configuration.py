@@ -4,7 +4,7 @@ from dataclasses import dataclass, fields
 from typing import Any, Literal
 
 # Maps a guideline_filter value to the source_guideline metadata string
-# used in the Chroma collection (see ingest/sources.py -- KDIGO_SOURCES).
+# used in the Chroma collection (see the guideline profiles in ingest/profiles/).
 GUIDELINE_FILTER_MAP = {
     "ckd_only": "KDIGO 2024 CKD Evaluation and Management",
     "aki_only": "KDIGO 2026 AKI/AKD (Public Review Draft)",

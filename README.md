@@ -91,12 +91,17 @@ Brief rationale for the non-default choices in this project; see git history / c
 
 ## Adding a new guideline
 
-Ingestion is config-driven: a new guideline should be a new `GuidelineSource` entry in `src/kdigo_guideline_rag/ingest/sources.py`, not new chunking code.
+Parsing decisions live in per-guideline **profiles** (`src/kdigo_guideline_rag/ingest/profiles/*.json`): recommendation and grade patterns, heading rules, page-furniture noise, glyph fixes, and which extractor supplies recommendation text. A profile is decided **once**, when the document is added, then reused by every ingest:
 
-1. Add the entry: recommendation regex (defaults match KDIGO's `Recommendation X.Y:` / `Practice Point X.Y.Z:`), any watermark `noise_patterns`, and `char_replacements` if the publisher's fonts decode to wrong glyphs (`KI_SYMBOL_FONT_MAP` covers Kidney International's).
-2. `pixi run ingest` and read the per-document log: duplicates dropped, narrative packing, and the **figure coverage report** — a high "no extractable text" count means rasterized figures (vision-fallback candidates).
-3. Spot-check for glyph garbling (e.g. `≥` arriving as another symbol) — clinical thresholds depend on it.
-4. Add eval questions with needles taken from the indexed text, run `pixi run eval-verify`, then `pixi run eval-retrieval` to confirm existing questions didn't regress.
+```bash
+pixi run onboard data/NEW.pdf --name "Guideline name" --slug new-guideline
+```
+
+1. **Selector** (no LLM): tries every known profile × both recommendation extractors (Docling; the PDF text layer filling in recommendations Docling cut off or missed) and scores each with a parse-quality **scorecard** — numbering gaps, recommendations missing versus the text layer, cut-off or non-verbatim recommendations, leftover artifacts, and suspect glyphs (a stray symbol before a number, the signature of a mis-decoded font).
+2. **Agent** (only if nothing passes): Claude Opus 5.5 inspects the document through tools (Docling items, text-layer pages, regex tests) and iterates on a profile against the same scorecard. It only chooses settings — text always comes verbatim from the extractors — and the scorecard balances completeness against precision so an over-broad pattern can't pass. Typically $0.10–0.70 per document.
+3. **Review** the saved profile (it records the scorecard and the agent's rationale) before ingesting; `pixi run ingest`, `pixi run eval-verify`, then add eval questions for the new guideline.
+
+Tested by onboarding the four KDIGO guidelines **from a blank profile**: the agent matched or beat the hand-built configuration on all four — rediscovering the recommendation formats, every mis-decoded glyph (`£`→`≤`, `þ`→`+`, `$`→`≥` while leaving real prices like `$1,571`, `#`→`≤` while leaving URL fragments), page furniture, and two practice points hidden behind typos in the AKI draft that the hand config had missed. Review still matters: it also proposed deleting the "OUTDATED CHAPTER" banner on the superseded lupus chapter as page clutter, which a person rejected. The resulting checks surfaced real defects in the previously "known-good" index (≈67 cut-off recommendations, five missing AKI practice points, garbled `≥`/`≤` thresholds), now fixed.
 
 ## References
 
