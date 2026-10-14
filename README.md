@@ -1,111 +1,115 @@
 # kdigo-guideline-rag
 
-A RAG application that answers clinical questions about kidney disease management using four KDIGO clinical practice guidelines and the kidney-relevant sections of the ADA Standards of Care in Diabetes as its knowledge base. Built with LangGraph and deployed via LangGraph Platform.
+Answers clinical questions about kidney disease from the guidelines themselves, citing the exact recommendation behind each claim. Built with LangGraph, Claude, Voyage embeddings and Chroma.
+
+![Demo: a question about SGLT2 inhibitors answered from KDIGO and ADA, then a follow-up about finerenone](docs/demo.gif)
+
+**Knowledge base:** four KDIGO guidelines (CKD 2024, AKI/AKD 2026 public review draft, Glomerular Diseases 2021, Blood Pressure in CKD 2021) and the ADA Standards of Care in Diabetes 2026, Sections 9–11 plus its grading methodology.
+
+**What it does well**
+- Cites a guideline, chapter and recommendation number for every claim, and keeps the guideline's own strength wording ("suggest" ≠ "recommend").
+- Declines out-of-scope questions with a fixed response instead of answering from model knowledge.
+- Handles follow-ups ("What about finerenone?") by rewriting them into standalone questions.
+- Adds new guidelines through a one-time onboarding step that chooses how to parse each document ([below](#adding-a-new-guideline)).
+
+**Measured** on a 73-question eval set, with gold evidence verified against the index:
+
+| | Result |
+|---|---|
+| Retrieval, KDIGO questions (recall@5) | 0.88 |
+| Retrieval, ADA questions (recall@5) | 0.90 |
+| Retrieval, ADA-vs-KDIGO comparisons (recall@5) | 0.33 — [known gap](#known-limitations) |
+| Answers free of material errors (Opus 5.5 judge) | ~0.80 dev, 0.93 held-out |
+| Out-of-scope questions correctly declined | 1.00 |
+
+The answer-quality and decline figures predate ADA; the retrieval figures include it.
 
 ## Quickstart
 
-Requires [pixi](https://pixi.sh).
+Requires [pixi](https://pixi.sh). Put the source PDFs in `data/` (gitignored):
+
+- KDIGO, free from [kdigo.org](https://kdigo.org): `KDIGO-2024-CKD-Guideline.pdf`, `KDIGO-2026-AKI-AKD-Guideline-Public-Review-Draft-March-2026.pdf`, `KDIGO-2021-Glomerular-Diseases-Guideline_English_LN-2024-Update.pdf`, `KDIGO-2021-Blood-Pressure-in-CKD-Guideline.pdf`
+- ADA, from [diabetesjournals.org/care](https://diabetesjournals.org/care): `ADA-2026-SOC-Introduction-Methodology.pdf`, `ADA-2026-SOC-09-Pharmacologic-Glycemic.pdf`, `ADA-2026-SOC-10-Cardiovascular.pdf`, `ADA-2026-SOC-11-CKD.pdf`
 
 ```bash
 pixi install
-cp .env.example .env      # fill in ANTHROPIC_API_KEY, VOYAGE_API_KEY, etc.
-pixi run ingest            # chunk + embed guidelines into Chroma
-pixi run test               # run test suite
-pixi run explore            # interactive marimo notebook: ask questions, inspect retrieval/grading
-pixi run dev                # local LangGraph API server + Studio link (graph view, per-node state)
-pixi run ui                 # Streamlit chat app (run alongside `pixi run dev`)
-pixi run eval-retrieval     # tier 1: deterministic retrieval hit@5/recall@5/MRR on the dev split (no LLM)
-pixi run eval               # tier 2: full graph on the dev split -- grader precision, needle survival, OOS false positives
-pixi run eval-judge         # tier 3: Claude Opus 5.5 judges the saved answers -- material errors, abstention, citations
-pixi run eval-conversations # multi-turn: do follow-ups keep (or correctly drop) earlier context?
+cp .env.example .env        # ANTHROPIC_API_KEY, VOYAGE_API_KEY
+pixi run ingest             # parse, chunk and embed into Chroma
+pixi run dev                # LangGraph API server + Studio
+pixi run ui                 # Streamlit chat app (alongside `dev`)
+pixi run test
 ```
 
-Source PDFs go in `data/` (gitignored, not committed):
+Evaluation:
 
-- `KDIGO-2024-CKD-Guideline.pdf`
-- `KDIGO-2026-AKI-AKD-Guideline-Public-Review-Draft-March-2026.pdf`
-- `KDIGO-2021-Glomerular-Diseases-Guideline_English_LN-2024-Update.pdf`
-- `KDIGO-2021-Blood-Pressure-in-CKD-Guideline.pdf`
-
-- `ADA-2026-SOC-Introduction-Methodology.pdf`, `ADA-2026-SOC-09-Pharmacologic-Glycemic.pdf`, `ADA-2026-SOC-10-Cardiovascular.pdf`, `ADA-2026-SOC-11-CKD.pdf`
-
-The KDIGO guidelines are freely available from [kdigo.org](https://kdigo.org); the ADA Standards of Care from [diabetesjournals.org/care](https://diabetesjournals.org/care).
+```bash
+pixi run eval-retrieval     # tier 1: retrieval hit@5 / recall@5 / MRR, no LLM
+pixi run eval               # tier 2: full graph; saves the run
+pixi run eval-judge         # tier 3: Opus 5.5 judges the saved answers
+pixi run eval-conversations # multi-turn context handling
+```
 
 ## Architecture
 
 ```
-User question
-    │
-    ▼
-┌──────────┐     ┌──────────┐     ┌────────────┐
-│ retrieve │────▶│  grade   │────▶│  generate  │
-└──────────┘     └──────────┘     └────────────┘
-                      │ fail
-                      ▼
-                 ┌──────────┐
-                 │ rewrite  │──── loop back to retrieve
-                 └──────────┘
+question ─▶ prepare ─▶ update_memory ─▶ condense ─▶ retrieve ─▶ grade ─┬─▶ generate ─▶ answer
+                                                       ▲              │ nothing relevant
+                                                       └── rewrite ◀──┘ (once)
 ```
 
-Knowledge base: KDIGO 2024 CKD Evaluation and Management, KDIGO 2026 AKI/AKD (public review draft), KDIGO 2021 Glomerular Diseases, KDIGO 2021 Blood Pressure in CKD, and ADA Standards of Care in Diabetes 2026 — Sections 9 (glycemic pharmacotherapy), 10 (cardiovascular risk), 11 (CKD) plus its evidence-grading methodology. ADA was added to test the onboarding system on a different publisher's format and to make cross-organization questions possible (where ADA and KDIGO overlap — and sometimes disagree — on diabetic kidney disease).
+- **condense** turns a follow-up into a standalone question using the conversation.
+- **grade** has Claude judge each retrieved passage for relevance. If nothing survives, the question is rewritten once. If nothing survives again, a fixed "not covered" response is returned without calling the model.
+- **generate** answers only from the graded passages, plus each organization's grading table.
+- **update_memory** keeps facts about the *user* (role, recurring topics), never about patients.
 
-## Chat UI
-
-`pixi run ui` starts a Streamlit chat app that talks to the LangGraph API server over HTTP (`langgraph_sdk`) — `pixi run dev` locally, the Docker deployment later via `LANGGRAPH_API_URL`. It runs in its own lightweight pixi environment (Streamlit + SDK only, none of the PDF/ML stack). Each answer shows its cited source passages; each organization's grading table, which accompanies every answer, is listed separately. Follow-ups use the conversation — the app shows how a follow-up was interpreted ("What about in children?" → "What blood pressure target is recommended for children with CKD not on dialysis?").
+The Streamlit app talks to the LangGraph server over HTTP. It shows each answer's sources, the grading tables, and how a follow-up was interpreted.
 
 ## Deploy
 
-```bash
-docker compose up
-```
+Local only for now (`pixi run dev` + `pixi run ui`). A `docker compose` deployment is planned. The UI already reads `LANGGRAPH_API_URL`, so it can point at a remote server.
 
 ## Example queries
 
 - "What eGFR stage is 38 mL/min/1.73m²?"
-- "Should a patient with G3b A2 be on an SGLT2 inhibitor?"
-- "When should this patient be referred to nephrology?"
+- "Should a patient with G3b A2 CKD be on an SGLT2 inhibitor?"
 - "My patient with CKD just had an AKI episode — how should I manage the acute phase?"
+- "How do the ADA and KDIGO blood pressure targets differ for people with diabetes and CKD?"
 
 ## Design notes
 
-Brief rationale for the non-default choices in this project; see git history / commit messages for more detail.
-
-- **Chroma over Pinecone** — prototype-scale corpus (4 docs, single user); Chroma runs embedded with no external infra. Pinecone targets a scale (millions of vectors, multi-tenant) this project doesn't need.
-- **Docling over raw text extraction (PyMuPDF) or Unstructured** — naive extraction interleaves figure/table content into paragraph text mid-sentence. Docling's layout-aware parsing isolates figures/tables cleanly and preserves heading hierarchy; compared head-to-head with Unstructured, which fragmented sentences across element boundaries and typed similar content inconsistently. Also chosen with an eye toward generalizing to other (possibly scanned) clinical guidelines later — Docling has a built-in OCR fallback.
-- **Recommendation-anchored chunking, not fixed-token** — all four guidelines consistently label recommendations inline (`Recommendation X.Y:`, `Practice Point X.Y.Z:`, each graded e.g. `(1B)`). Chunking on these boundaries plus heading hierarchy keeps each recommendation + its rationale together and supports the required citation format (`[Guideline, Chapter X, Rec Y]`), which fixed-token chunking would break.
-- **Figure text is indexed verbatim from Docling's extraction; a vision-model fallback is deferred, not skipped.** Clinical guidelines put real criteria in figures (e.g. KDIGO CKD Figure 48's referral criteria, which the matching practice point only references). For vector PDFs Docling already extracts that text as the picture's children, so each figure becomes one `Figure` chunk: caption + text, verbatim. A vision-LLM transcription would also handle rasterized/scanned figures and color-encoded content (the GFR × albuminuria heat map), but it puts model-written text into a clinical knowledge base where the source's own words are available — so it's reserved for figures with no extractable text, and built when a document needs it. Ingest logs a per-document figure coverage report (indexed / dropped / **no extractable text**) so a new guideline whose figures are rasterized shows up as a number, not a silent gap. Inclusion thresholds are per-source config, not KDIGO constants.
-- **PDF text artifacts are repaired at ingest with a word-frequency dictionary, conservatively.** Typeset PDFs yield split ligatures ("bene fi ts", "of fi ce" — 3,198 occurrences here) and occasional runs with no spaces ("WesuggestthatadultswithhighBP…", which pushed a BP-target recommendation to rank 24 for its own question). A regex can't tell "of fi ce" → *office* from "the fi rst" → *the first*; word frequencies ([`wordsegment`](https://github.com/grantjenks/python-wordsegment)) can. Both repairs only act on strong evidence — a run is split only if the result contains a function word, so long drug and chemical names stay whole — because a wrong "fix" inside a clinical recommendation is worse than an artifact. Generic to PDF extraction and switchable per source.
-- **Follow-ups are condensed into standalone questions; answers stay grounded per turn.** A `messages` history lives on the conversation thread (the LangGraph server's checkpointer). A condense step rewrites a follow-up ("Should they get an SGLT2 inhibitor?") into a self-contained question carrying only the context it depends on — patient details or topic — and that drives retrieval, grading, and the answer; first turns skip it. The answer step deliberately does *not* see earlier answers, so every answer is built and judged against its own retrieved passages. Patient details therefore persist within a conversation and vanish with it, while long-term memory holds only facts about the user. Evaluated on short conversations (carried patient context, "what about in children?", a topic switch that must not inherit old context, an out-of-scope follow-up): context handled correctly 6/6 on dev.
-- **"Not covered" is enforced structurally, not by prompt.** When nothing survives relevance grading, the graph returns a fixed response naming the guidelines searched — no model call. Prompting the model to decline proved unreliable: with an empty context it stated ESA hemoglobin targets and tolvaptan dosing from its own knowledge. With passages present, prompt rules keep recommendation strength verbatim ("suggest" ≠ "recommend"), forbid additions and population stretching, and allow "guidelines agree" only when both passages say so; each organization's grading table rides along as a citable passage so grade explanations are grounded — and a grade is explained only with its own organization's table (KDIGO's 1B and ADA's B mean different things) (the CKD guideline's certainty table extracts with merged cells implying "B = Low", so the BP guideline's clean copy is used).
-- **Eval is tiered, and retrieval is scored without an LLM** — 73 questions (incl. ADA-only and ADA-vs-KDIGO comparisons) whose gold evidence is a verbatim corpus anchor (guideline + recommendation number, table/figure caption, or phrase), machine-verified against the index so it survives re-chunking. Tier 1 (`pixi run eval-retrieval`) is deterministic hit@5/recall@5/MRR, used for every index/retrieval decision; tier 2 (`pixi run eval`) runs the full graph; tier 3 (`pixi run eval-judge`) has Claude Opus 5.5 — a different model from the generator — judge each saved answer against the exact passages it was built from, listing unsupported claims (tagged material vs. minor) before its verdicts, plus deterministic citation checks. The judge is validated without hand labels: it must catch fabricated recommendations (8/8) and altered clinical numbers (7/7), and agrees with itself on 37/40 re-judged answers. The LLM grader alone moves by ±1 chunk/question on identical input, too noisy to decide chunking changes. A held-out split is reserved for confirming decisions made on dev. Result of the answer-quality work: answers free of material errors 0.43 → ~0.80 on dev and 0.93 on held-out; out-of-scope questions correctly declined 0.20 → 1.00.
-- **AKI source is the 2026 public review draft**, not the 2012 final — chosen for current AKI+AKD scope; recommendations are unfinalized and may change before final publication.
-- **Claude Sonnet 5 + Voyage AI over OpenAI** — Anthropic has no first-party embeddings API, so embeddings needed a separate provider regardless. Chose Voyage AI (Anthropic's own recommended embeddings partner) over OpenAI or local embeddings: at this corpus's scale (~2M tokens for a full ingestion pass) Voyage's 200M-tokens/month free allowance makes it effectively free, with no quality tradeoff. For the LLM (grade/generate/rewrite), chose Sonnet 5 over Opus 5 — ~2.5x cheaper per query and sufficient quality for a context-constrained retrieve-then-generate task, not open-ended reasoning.
+- **Docling for layout, the PDF text layer for recommendations.** Docling keeps figures and tables out of paragraph text and preserves headings (Unstructured fragmented sentences). Where Docling's reading order cuts a boxed recommendation, the PyMuPDF text layer supplies it. The text layer is used only when its copy appears verbatim in the PDF.
+- **Recommendation-anchored chunks, not fixed-size ones.** Each recommendation is its own chunk, with its number and grade, so the answer can cite it exactly.
+- **Text stays verbatim.** Figure text is indexed as Docling extracted it, in layout order, not rewritten by a model. Ligature and missing-space artifacts are repaired with a word-frequency dictionary, and only on strong evidence. Mis-decoded font glyphs (`$`→`≥`, `£`→`≤`) are fixed per publisher.
+- **"Not covered" is enforced in code, not in the prompt.** When asked to decline in the prompt, the model still gave ESA and tolvaptan doses from its own knowledge. Now, if no passage survives grading, the model is never called.
+- **Grades are explained only with their own organization's table.** KDIGO's 1B and ADA's B mean different things.
+- **Follow-ups are condensed, but each answer sees only its own passages.** Patient details carry through a conversation and are never stored.
+- **Three-tier eval with corpus-verified gold labels.** Gold evidence is an anchor in the source text (a recommendation number, caption or phrase), so labels survive re-chunking. Retrieval is scored deterministically and used for every index decision. Answers are judged by Opus 5.5, a different model from the Sonnet 5 generator. The judge is checked against planted errors: it caught 8/8 fabricated recommendations and 7/7 altered numbers. A held-out split is used only to confirm decisions.
+- **Models.** Sonnet 5 grades and generates: it is about 2.5× cheaper than Opus and sufficient for answering from provided passages. Voyage embeddings are Anthropic's recommended partner and fall within the free tier at this corpus size. Chroma runs embedded, which is enough at this scale.
+- **The AKI source is the 2026 public review draft**, for current AKI/AKD scope. Its recommendations may change before final publication.
 
 ## Known limitations
 
-- **Numeric range/classification questions are unreliable** (e.g. "what eGFR stage is 38 mL/min/1.73m²?"). Semantic embeddings don't do numeric interval reasoning — "38" has no learned relationship to a table row labeled "30-44" — so retrieval can miss the correct staging table even when it's cleanly indexed. A deterministic lookup (extracting KDIGO's GFR/albuminuria category tables at ingest time) would fix this specific case, but was deliberately descoped: it's a document-specific special case that cuts against this project's generic, config-driven architecture (see Design notes), and duplicates functionality (an eGFR calculator) that's out of scope for a RAG system to reimplement. Flagging the boundary rather than building around it. Notably, the closest published prior art (Miao et al., below) doesn't address this class of problem either — it's an open gap in RAG-over-guidelines generally, not a shortfall specific to this implementation.
-- **Figure text reads in layout order**, not prose ("Further evaluation and | specialist management | …") — retrievable and verbatim, but less fluent than a rewrite. **99 pictures with no extractable text** (rasters, charts, logos) aren't indexed pending the vision fallback, and the GFR × albuminuria heat map's risk levels (encoded only as cell color) remain unavailable.
-- **Algorithm figures are misread**: flowchart text arrives in layout order, and the generator can assign treatments to the wrong branch (membranous nephropathy risk tiers, Figure 31, fails on every run) — a case for restructuring figure text or the vision fallback.
-- **Answers vary run to run**: two runs of the same configuration disagree on ~1 in 4 questions' material faithfulness, so single-question eval results are anecdotes; decisions use aggregates and repeated runs.
-- **Superseded content is indexed**: the Glomerular Diseases PDF includes both the outdated 2021 lupus nephritis chapter (marked "OUTDATED") and its 2024 replacement, so lupus questions can retrieve withdrawn recommendations.
-- **Text repair is dictionary-bound**: compounds not in the word list stay merged when they contain no function word (e.g. "Eosinophilicgranulomatosis"), and segmentation can occasionally mis-split a fragment ("36ginview…" → "gin view"); both are rare (3 runs remain in 4,360 chunks).
-- **Cross-organization comparisons retrieve poorly.** "How do ADA and KDIGO blood-pressure targets differ?" needs a recommendation from each guideline, but a single top-5 search returns comparative narrative (trial discussions), often from one guideline only: recall@5 is 0.33 on the four ADA-vs-KDIGO eval questions, versus 0.90 on ADA-only questions. Candidate fixes — one filtered search per organization the question names, or LLM query decomposition — are measured against these questions when built. Adding ADA also crowded some KDIGO answers on overlapping topics (KDIGO-question recall@5 0.90 → 0.88).
-- **One ADA recommendation (9.12) is incomplete**: it is interrupted mid-sentence by a full-page figure and continues two pages later; neither extractor joins text across a figure page.
-- No hybrid search (BM25 + vector) yet — not enough evidence from a small eval set to justify the added complexity over pure vector retrieval.
+- **Cross-organization comparisons retrieve poorly** (recall@5 0.33). A single top-5 search returns trial discussion, often from one guideline. Planned fixes, to be measured on these questions: one search per organization named, or query decomposition. Adding ADA also slightly crowded KDIGO retrieval (recall@5 0.90 → 0.88).
+- **Numeric staging questions** ("what stage is eGFR 38?") depend on retrieving the category table. Embeddings don't reason over numeric ranges.
+- **Flowchart figures** come through in layout order, and the generator can assign a treatment to the wrong branch. 99 figures with no extractable text aren't indexed; a vision fallback is deferred.
+- **Superseded content is indexed:** the Glomerular PDF contains both the outdated 2021 lupus chapter and its 2024 replacement.
+- **ADA Rec 9.12 is incomplete.** A full-page figure interrupts it.
+- **Answers vary run to run.** About 1 in 4 questions differ between identical runs, so decisions are based on aggregate results.
+- No hybrid (BM25 + vector) search yet.
 
 ## Adding a new guideline
 
-Parsing decisions live in per-guideline **profiles** (`src/kdigo_guideline_rag/ingest/profiles/*.json`): recommendation and grade patterns, heading rules, page-furniture noise, glyph fixes, and which extractor supplies recommendation text. A profile is decided **once**, when the document is added, then reused by every ingest:
+Each guideline has a **profile** (`src/kdigo_guideline_rag/ingest/profiles/*.json`). It records the recommendation and grade patterns, heading rules, page-furniture noise, glyph fixes, and which extractor supplies recommendation text. A profile is decided once, when the document is added:
 
 ```bash
 pixi run onboard data/NEW.pdf --name "Guideline name" --slug new-guideline
 ```
 
-1. **Selector** (no LLM): tries every known profile × both recommendation extractors (Docling; the PDF text layer filling in recommendations Docling cut off or missed) and scores each with a parse-quality **scorecard** — numbering gaps, recommendations missing versus the text layer, cut-off or non-verbatim recommendations, leftover artifacts, and suspect glyphs (a stray symbol before a number, the signature of a mis-decoded font).
-2. **Agent** (only if nothing passes): Claude Opus 5.5 inspects the document through tools (Docling items, text-layer pages, regex tests) and iterates on a profile against the same scorecard. It only chooses settings — text always comes verbatim from the extractors — and the scorecard balances completeness against precision so an over-broad pattern can't pass. Typically $0.10–0.70 per document.
-3. **Review** the saved profile (it records the scorecard and the agent's rationale) before ingesting; `pixi run ingest`, `pixi run eval-verify`, then add eval questions for the new guideline.
+1. **Selector** (no LLM) tries every known profile with both extractors. It scores each on a parse-quality **scorecard**: numbering gaps, recommendations missing compared with the text layer, cut-off or non-verbatim text, leftover artifacts, and suspect glyphs.
+2. **Agent** runs only if nothing passes. Claude Opus 5.5 inspects the document through tools and iterates on a profile against the same scorecard. It chooses settings only; text always comes verbatim from the extractors. A run costs about $0.10–0.70 per document.
+3. **Review** the saved profile, which records the scorecard and the agent's rationale. Then run `pixi run ingest` and `pixi run eval-verify`, and add eval questions.
 
-Tested by onboarding the four KDIGO guidelines **from a blank profile**: the agent matched or beat the hand-built configuration on all four — rediscovering the recommendation formats, every mis-decoded glyph (`£`→`≤`, `þ`→`+`, `$`→`≥` while leaving real prices like `$1,571`, `#`→`≤` while leaving URL fragments), page furniture, and two practice points hidden behind typos in the AKI draft that the hand config had missed. Review still matters: it also proposed deleting the "OUTDATED CHAPTER" banner on the superseded lupus chapter as page clutter, which a person rejected. The resulting checks surfaced real defects in the previously "known-good" index (≈67 cut-off recommendations, five missing AKI practice points, garbled `≥`/`≤` thresholds), now fixed.
+To test it, the four KDIGO guidelines were onboarded from a blank profile. The agent matched or beat the hand-built configuration on all four. It rediscovered every mis-decoded glyph and found two AKI practice points hidden behind typos in the source. The ADA sections, from a different publisher, onboarded with all 127 recommendations matching the text layer. Review still matters: the agent proposed deleting the "OUTDATED" banner on the superseded lupus chapter. It also put a figure-caption pattern into the page-noise list, which was later found to delete captions.
 
 ## References
 
