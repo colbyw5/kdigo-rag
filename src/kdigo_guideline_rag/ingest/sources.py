@@ -47,6 +47,19 @@ REFERENCE_HEADING_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+
+def noise_pattern(regex: str) -> re.Pattern:
+    """Compile a noise pattern line-anchored: ``^``/``$`` match at every line.
+
+    Page furniture is a line ("Downloaded from ... by guest on ..."), but it
+    reaches the chunker inside multi-line text -- a text-layer page, a
+    recommendation crossing a page break, a table's markdown. Without
+    MULTILINE an anchored pattern matched only when the footer was the whole
+    item, and leaked everywhere else.
+    """
+    return re.compile(regex, re.MULTILINE)
+
+
 # Symbol-font glyphs that Docling decodes to the wrong code points in PDFs
 # typeset by Kidney International (KDIGO's journal) -- confirmed by context
 # across the CKD, Glomerular and BP guidelines ("ACR ‡ 30 mg/g" for >= 30,

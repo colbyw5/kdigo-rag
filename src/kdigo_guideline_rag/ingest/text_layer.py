@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from kdigo_guideline_rag.ingest.sources import GuidelineSource
+from kdigo_guideline_rag.ingest.sources import GuidelineSource, noise_pattern
 
 MAX_RECOMMENDATION_WORDS = 160
 SENTENCE_END = re.compile(r"[.!?)\]](?=\s|$)")
@@ -63,9 +63,7 @@ def normalize(text: str) -> str:
 
 @lru_cache(maxsize=16)
 def _pdf_normalized(pdf_path: Path, noise: tuple[str, ...]) -> str:
-    from kdigo_guideline_rag.ingest.sources import GuidelineSource
-
-    source = GuidelineSource(name="", pdf_path=pdf_path, noise_patterns=[re.compile(p) for p in noise])
+    source = GuidelineSource(name="", pdf_path=pdf_path, noise_patterns=[noise_pattern(p) for p in noise])
     return normalize(" ".join(page_texts(source)))
 
 
@@ -113,6 +111,12 @@ def is_complete(text: str, source: GuidelineSource) -> bool:
     return bool(SENTENCE_END.search(text.rstrip()[-1:] + " "))
 
 
+# A caption starts a line and has a separator right after its number ("Figure
+# 9.3—Simplified...", "Table 2| GFR..."); an in-text reference wrapped to a
+# line start ("Table 9.2 ). A") has none.
+CAPTION_LINE = re.compile(r"\n[ \t]*(?:Figure|Fig\.|Table)[ \t]*\d+(?:\.\d+)*[A-Za-z]?[ \t]*[—–|:-]")
+
+
 def _bound(raw: str, source: GuidelineSource) -> str:
     """Trim a recommendation (raw text, line breaks intact) to where it ends.
 
@@ -121,9 +125,13 @@ def _bound(raw: str, source: GuidelineSource) -> str:
     marker (ADA "...benefits. C\\n", KDIGO "...(1B).\\n"); without a grade
     (practice points), at the first sentence end that ends a line. The last
     marker would overshoot: rationale cites other recommendations' grades.
-    Falls back to a word cap, then whitespace is collapsed.
+    A figure/table caption line always ends it -- captions sit between boxes
+    in the layout, and the text layer reads straight into them. Falls back to
+    a word cap, then whitespace is collapsed.
     """
     window = " ".join(raw.split(" ")[: MAX_RECOMMENDATION_WORDS * 2])  # generous; cap applied below
+    if caption := CAPTION_LINE.search(window):
+        window = window[: caption.start()]
     cut = None
     if source.grade_pattern:
         for g in source.grade_pattern.finditer(window):
@@ -132,7 +140,6 @@ def _bound(raw: str, source: GuidelineSource) -> str:
                 cut = g.end() + len(tail.group(0).rstrip("\n"))
                 break
     if cut is None:
-        # Prefer a blank line (true paragraph end); a period at a line end may be a mere wrap.
         # Prefer a blank line (true paragraph end); a period at a line end may
         # be a mere wrap. Skip ends that are list lead-ins ("...by: (i)").
         cut = len(window)

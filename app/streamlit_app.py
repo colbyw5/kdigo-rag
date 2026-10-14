@@ -1,4 +1,4 @@
-"""Streamlit chat client for the KDIGO guideline RAG graph.
+"""Streamlit chat client for the guideline RAG graph (KDIGO + ADA).
 
 Talks to a LangGraph API server over ``langgraph_sdk`` -- ``pixi run dev``
 locally, the Docker deployment later (set ``LANGGRAPH_API_URL``) -- so it never
@@ -14,7 +14,7 @@ from ui_helpers import GUIDELINE_FILTERS, interpreted_as, pipeline_summary, sour
 API_URL = os.environ.get("LANGGRAPH_API_URL", "http://127.0.0.1:2024")
 ASSISTANT_ID = "ckd_guideline_rag"
 
-st.set_page_config(page_title="KDIGO Guideline Assistant", page_icon="🩺", layout="centered")
+st.set_page_config(page_title="Kidney Guideline Assistant", page_icon="🩺", layout="centered")
 
 
 @st.cache_resource
@@ -46,7 +46,7 @@ def render_turn(turn: dict, show_debug: bool) -> None:
                     st.markdown(f"**{s.label}**{page}")
                     st.text(s.text[:1500] + ("…" if len(s.text) > 1500 else ""))
         if references:
-            with st.expander("Reference: KDIGO grading tables (always provided)"):
+            with st.expander("Reference: grading tables (always provided)"):
                 for s in references:
                     st.markdown(f"**{s.label}**")
                     st.text(s.text)
@@ -66,13 +66,13 @@ with st.sidebar:
         new_conversation()
     st.divider()
     st.caption(
-        "Answers come only from four indexed KDIGO guidelines (CKD 2024, AKI/AKD 2026 draft, "
-        "Glomerular 2021, BP in CKD 2021) and cite their sources. Follow-ups use the conversation "
+        "Answers come only from the indexed guidelines -- KDIGO (CKD 2024, AKI/AKD 2026 draft, "
+        "Glomerular 2021, BP in CKD 2021) and ADA Standards of Care 2026 (sections 9-11) -- and cite their sources. Follow-ups use the conversation "
         "for context; each answer is still built only from passages retrieved for it. Not medical advice."
     )
     st.caption(f"Server: `{API_URL}`")
 
-st.title("KDIGO Guideline Assistant")
+st.title("Kidney Guideline Assistant")
 
 try:
     if "thread_id" not in st.session_state:

@@ -1,0 +1,111 @@
+{
+  "name": "ADA Standards of Care in Diabetes 2026",
+  "pdf_files": [
+    "ADA-2026-SOC-09-Pharmacologic-Glycemic.pdf",
+    "ADA-2026-SOC-10-Cardiovascular.pdf",
+    "ADA-2026-SOC-11-CKD.pdf"
+  ],
+  "profile": {
+    "recommendation_pattern": "(?<![\\w.])(?<!Fig\\. )(?<!Table )(?<!Figure )(?<!Section )(?P<number>\\d{1,2}\\.\\d{1,2}[a-z]?)\\s+(?=[A-Z])",
+    "recommendation_label": "Recommendation",
+    "grade_pattern": "[.)\\]]\\s+([ABCE])(?=\\s|$)",
+    "chapter_pattern": "^[A-Z][A-Z0-9 ,\\-–/()]{6,}$",
+    "ignore_heading_pattern": "(?i)^Recommendations?$",
+    "heading_fallback_pattern": null,
+    "noise_patterns": [
+      "^Downloaded from diabetesjournals\\.org/.*$",
+      "^diabetesjournals\\.org/care\\s*$",
+      "^Diabetes Care Volume \\d+, Supplement \\d+, \\w+ \\d{4}\\s*$",
+      "^(?:Pharmacologic Approaches to Glycemic Treatment|Cardiovascular Disease and Risk Management|Chronic Kidney Disease and Risk Management)\\s*$",
+      "^S\\d{2,3}\\s*$",
+      "^\\d{1,2}\\. [A-Z][A-Z ,\\-–]+$"
+    ],
+    "char_replacements": {},
+    "text_substitutions": [],
+    "recommendation_extractor": "text_layer",
+    "reference_heading_pattern": "(?i)^(?:\\d+(?:\\.\\d+)*\\.?\\s+)?(references?|bibliography|works\\s+cited|literature\\s+cited|reference\\s+list)\\s*:?\\s*$",
+    "repair_split_ligatures": true,
+    "repair_missing_spaces": true
+  },
+  "decided_by": {
+    "method": "agent",
+    "selector_best": {
+      "candidate": "known_0/docling",
+      "problems": 300.02
+    },
+    "model": "claude-opus-5-5",
+    "rationale": "ADA SOC recommendations have no label word. Each one starts with its section number (\"9.1\", \"10.44h\", \"11.12b\") and ends with a bare evidence letter (A/B/C/E). Docling often runs several recommendations together in one item (\"...insulin. A 9.2 For...\"). So the recommendation pattern is not anchored to line starts. It skips numbers preceded by Fig./Table/Figure/Section or another digit, only accepts chapters 9–11, and requires a capital letter next, so text like \"9.1% mean A1C\" and \"1.73 m2\" doesn't match. The test-pattern counts agree between Docling and the text layer: 47, 61 and 19. The label is set to \"Recommendation\". The grade pattern only takes a letter after a period, \")\" or \"]\", so it catches \"of A1C). A\" but not \"9.5 A person-centered\" or \"symptoms A and/or\". Using the text-layer extractor fixed recommendations Docling had cut off at column breaks (9.10, 9.12, 9.14 and others). The chapter pattern picks up the ALL-CAPS section headings. Bare \"Recommendation(s)\" box titles are ignored as headings. The heading fallback is off because recommendations start with bare numbers. The noise patterns strip the ADA running headers and footers: the download stamp, the diabetesjournals.org/care footer, the volume line, the page numbers S###, the running section titles, and figure caption lines. The KI glyph maps from the starting profile were removed because these PDFs show no glyph suspects. Still failing: 9.5 is split across a page by a figure and 9.31b is interrupted by Table 9.4 in the text layer, so both stay truncated. Nothing I changed in the patterns, noise rules or heading settings affected them. As a result PDF 09 fails (2 of 47 truncated). PDF 10 passes with 1 of 61 (10.14, where body text is mixed into the recommendation). PDF 11 is clean.\n[usage: {'input': 50, 'output': 20736, 'cache_read': 776065, 'cache_write': 58497, 'turns': 24, 'approx_cost_usd': 0.86, 'evaluations': 9}]",
+    "scorecard": {
+      "passed": false,
+      "problems": 6.04,
+      "per_pdf": [
+        {
+          "pdf": "ADA-2026-SOC-09-Pharmacologic-Glycemic.pdf",
+          "passed": false,
+          "problems": 4.0,
+          "recommendations": 47,
+          "text_layer_recommendations": 47,
+          "missing_vs_text_layer": [],
+          "numbering_gaps": [],
+          "unconfirmed_gaps": [],
+          "truncated": [
+            "Recommendation 9.5",
+            "Recommendation 9.31b"
+          ],
+          "not_verbatim": [],
+          "artifacts": {},
+          "glyph_suspects": {},
+          "tiny_fragments": 0,
+          "examples": {
+            "truncated": [
+              "9.5 A person-centered shared decisionmaking approach should guide the",
+              "9.31b If a glucose-lowering medication is unavailable (e.g., in shortage), it is"
+            ]
+          }
+        },
+        {
+          "pdf": "ADA-2026-SOC-10-Cardiovascular.pdf",
+          "passed": true,
+          "problems": 2.04,
+          "recommendations": 61,
+          "text_layer_recommendations": 61,
+          "missing_vs_text_layer": [],
+          "numbering_gaps": [],
+          "unconfirmed_gaps": [],
+          "truncated": [
+            "Recommendation 10.14"
+          ],
+          "not_verbatim": [],
+          "artifacts": {},
+          "glyph_suspects": {},
+          "tiny_fragments": 2,
+          "examples": {
+            "truncated": [
+              "or DASH eating pattern, reducing saturated and trans fat intake, and increasing plant stanol and sterol, n-3 fatty acid,"
+            ]
+          }
+        },
+        {
+          "pdf": "ADA-2026-SOC-11-CKD.pdf",
+          "passed": true,
+          "problems": 0.0,
+          "recommendations": 19,
+          "text_layer_recommendations": 19,
+          "missing_vs_text_layer": [],
+          "numbering_gaps": [],
+          "unconfirmed_gaps": [],
+          "truncated": [],
+          "not_verbatim": [],
+          "artifacts": {},
+          "glyph_suspects": {},
+          "tiny_fragments": 0,
+          "examples": {}
+        }
+      ]
+    },
+    "review": "Adopted the agent's profile with one change: its recommendation pattern accepted only sections 9-11 (overfit to these PDFs); generalized to any section number with identical scorecard. Residual cut-offs accepted: 9.5 (split by a figure across a page), 9.31b (interrupted by Table 9.4), 10.14.",
+    "revisions": [
+      "2026-10-13: removed noise pattern '^Figure \\d+\\.\\d+\\s*[-—–].*$' -- a figure caption is content, not page furniture. Once noise patterns became line-anchored (re.MULTILINE) and applied to captions and tables, it deleted every ADA figure caption (9.1, 10.1, 10.2, 10.4, 11.1)."
+    ]
+  }
+}

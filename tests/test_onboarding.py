@@ -11,8 +11,8 @@ from kdigo_guideline_rag.ingest.profiles import (
 from kdigo_guideline_rag.ingest.scorecard import numbering_gaps
 from kdigo_guideline_rag.ingest.sources import GuidelineSource
 
-KDIGO_SOURCES = load_profile_sources()
-from kdigo_guideline_rag.ingest.text_layer import is_complete, is_valid_start
+KDIGO_SOURCES = [s for s in load_profile_sources() if s.name.startswith("KDIGO")]
+from kdigo_guideline_rag.ingest.text_layer import _bound, is_complete, is_valid_start
 
 ADA_LIKE = GuidelineSource(
     name="ADA",
@@ -37,7 +37,7 @@ def test_bare_number_starts_need_context_but_labelled_ones_dont() -> None:
         if is_valid_start(text, m, ADA_LIKE)
     ]
     assert starts == ["9.2"]  # "7.0 In" is a dose mid-sentence; "9.2" follows grade "A"
-    kdigo = KDIGO_SOURCES[0]
+    kdigo = next(s for s in KDIGO_SOURCES if "CKD Evaluation" in s.name)
     merged_heading = "1.2. Staging of AKI Practice Point 1.2.1: Stage AKI by..."
     m = kdigo.recommendation_pattern.search(merged_heading)
     assert is_valid_start(merged_heading, m, kdigo)  # Docling merged the heading into the item
@@ -46,10 +46,20 @@ def test_bare_number_starts_need_context_but_labelled_ones_dont() -> None:
 def test_completeness_rejects_cut_offs_and_list_lead_ins() -> None:
     assert is_complete("11.7a ... can safely continue until kidney failure. A", ADA_LIKE)
     assert not is_complete("11.7a ... SGLT2 inhibitors shoul", ADA_LIKE)
-    kdigo = KDIGO_SOURCES[0]
+    kdigo = next(s for s in KDIGO_SOURCES if "CKD Evaluation" in s.name)
     assert is_complete("Recommendation 3.7.1: We recommend ... SGLT2i (1A).", kdigo)
     assert not is_complete("Practice Point 1.1.3.1: Proof of chronicity can be established by:", kdigo)
     assert not is_complete("Practice Point 1.1.3.1: ... established by: (i)", kdigo)
+
+
+def test_text_layer_recommendation_ends_at_a_caption_line_but_not_a_wrapped_reference() -> None:
+    ada = GuidelineSource(
+        name="ADA", pdf_path="unused.pdf", grade_pattern=re.compile(r"[.)\]]\s+([ABCE])(?=\s|$)")
+    )
+    raw = "9.7 Include agents with benefit (Fig. 9.4 and\nTable 9.2 ). A\nRationale follows."
+    assert _bound(raw, ada) == "9.7 Include agents with benefit (Fig. 9.4 and Table 9.2 ). A"
+    raw = "9.12 Consider a GLP-1 RA A or a dual\nFlowchart label\nFigure 9.3—Simplified overview. B\n"
+    assert _bound(raw, ada) == "9.12 Consider a GLP-1 RA A or a dual Flowchart label"
 
 
 def test_profile_round_trip_through_json_preserves_behavior() -> None:

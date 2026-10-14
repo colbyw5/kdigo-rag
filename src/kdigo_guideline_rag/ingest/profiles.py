@@ -18,6 +18,7 @@ from kdigo_guideline_rag.ingest.sources import (
     KI_SYMBOL_FONT_MAP,
     KI_TEXT_SUBSTITUTIONS,
     GuidelineSource,
+    noise_pattern,
 )
 
 PROFILES_DIR = Path(__file__).parent / "profiles"
@@ -87,7 +88,7 @@ def sources_from_profile(profile: dict, name: str, pdf_paths: list[Path]) -> lis
     if rec is not None and "number" not in rec.groupindex:
         raise ValueError("recommendation_pattern needs a named group 'number'")
     kwargs |= {f: profile[f] for f in PLAIN_FIELDS if f in profile}
-    kwargs["noise_patterns"] = [re.compile(p) for p in profile.get("noise_patterns", [])]
+    kwargs["noise_patterns"] = [noise_pattern(p) for p in profile.get("noise_patterns", [])]
     subs = profile.get("text_substitutions", [])
     kwargs["text_substitutions"] = (
         NAMED_SUBSTITUTIONS[subs] if isinstance(subs, str) else tuple((re.compile(p), r) for p, r in subs)

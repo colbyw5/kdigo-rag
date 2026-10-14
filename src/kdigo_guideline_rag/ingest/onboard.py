@@ -167,7 +167,8 @@ Point"). If there is no label word, set recommendation_label instead.
 set to null if it would swallow recommendations (e.g. when recommendations themselves \
 start with a bare number).
 - noise_patterns: list of regexes for page furniture to remove (running headers/footers, \
-download stamps, watermarks).
+download stamps, watermarks). Applied line by line (^ and $ match at every line) to all \
+text, tables and the text layer; test them with test_pattern prefixed by (?m).
 - char_replacements: {"wrong char": "right char"} for mis-decoded font glyphs; \
 text_substitutions: [[regex, replacement], ...] for context-dependent ones.
 - recommendation_extractor: "docling" (structured layout model) or "text_layer" \

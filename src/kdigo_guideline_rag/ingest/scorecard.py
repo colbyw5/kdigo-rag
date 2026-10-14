@@ -92,6 +92,7 @@ class Scorecard:
     tables: int = 0
     figures: int = 0
     glyph_suspects: dict[str, int] = field(default_factory=dict)
+    expects_recommendations: bool = True
     examples: dict[str, list[str]] = field(default_factory=dict)
 
     @property
@@ -99,7 +100,7 @@ class Scorecard:
         """No confirmed-missing recommendations, at most ~2% cut off or non-verbatim, no artifacts."""
         tolerance = max(1, round(0.02 * self.recommendations))
         return (
-            self.recommendations > 0
+            (self.recommendations > 0 or not self.expects_recommendations)
             and not self.missing_vs_text_layer
             and len(self.truncated) <= tolerance
             and len(self.not_verbatim) <= tolerance
@@ -115,7 +116,7 @@ class Scorecard:
             + 2 * len(self.not_verbatim)
             + sum(self.artifacts.values())
             + self.tiny_fragments / 50
-            + (100 if self.recommendations == 0 else 0)
+            + (100 if self.recommendations == 0 and self.expects_recommendations else 0)
         )
 
     def summary(self) -> dict:
@@ -150,6 +151,7 @@ def score(chunks: list[Chunk], source: GuidelineSource) -> Scorecard:
         narrative_chunks=len(narrative),
         tiny_fragments=sum(len(c.text.split()) < TINY_WORDS for c in narrative),
         tables=sum(c.label_type == "Table" for c in chunks),
+        expects_recommendations=source.recommendation_pattern is not None,
         glyph_suspects=dict(
             sorted(
                 _count(GLYPH_SUSPECT.findall(all_text) + re.findall(r"(\$)[ \t]\d", all_text)).items(),

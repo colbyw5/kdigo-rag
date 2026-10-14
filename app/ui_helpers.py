@@ -18,6 +18,7 @@ GUIDELINE_FILTERS = {
     "AKI/AKD 2026 (public review draft)": "aki_only",
     "Glomerular Diseases 2021": "glomerular_only",
     "Blood Pressure in CKD 2021": "bp_only",
+    "ADA Standards of Care 2026 (diabetes)": "ada_only",
 }
 
 FIGURE_OR_TABLE = re.compile(r"^\s*((?:Figure|Fig\.?|Table)\s*\d+[A-Za-z]?)", re.IGNORECASE)

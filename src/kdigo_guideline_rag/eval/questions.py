@@ -12,7 +12,9 @@ to confirm a decision already made on dev. The 8 original questions are all
 dev -- they already informed the chunking decisions (DECISIONS.md
 2026-10-04), so they can't be held out. The rest were assigned once by
 ``random.Random(42)``, stratified by category, one third held out -- not
-hand-picked, and stored explicitly so adding questions never reshuffles. Later batches\n(e.g. the e-consult batch, ckd_13-17 + oos_7) are assigned the same way, within the batch.
+hand-picked, and stored explicitly so adding questions never reshuffles. Later batches
+(the e-consult batch, ckd_13-17 + oos_7; the ADA batch, ada_*, ada_kdigo_*, oos_8-9)
+are assigned the same way, within the batch.
 """
 
 from dataclasses import dataclass, field
@@ -22,6 +24,7 @@ CKD = "KDIGO 2024 CKD Evaluation and Management"
 AKI = "KDIGO 2026 AKI/AKD (Public Review Draft)"
 GLOMERULAR = "KDIGO 2021 Glomerular Diseases"
 BP = "KDIGO 2021 Blood Pressure in CKD"
+ADA = "ADA Standards of Care in Diabetes 2026"
 
 Category = Literal["recommendation", "table", "figure", "narrative", "synthesis", "out_of_scope"]
 
@@ -568,6 +571,93 @@ EVAL_QUESTIONS: list[EvalQuestion] = [
         split="dev",
         notes="Uncaptioned figure (Docling detached the caption); only the figure carries the eGFR dosing bands.",
     ),
+    # ---------------------------------------------------------------- ADA
+    EvalQuestion(
+        id="ada_1",
+        question="What blood pressure goal does the ADA recommend for adults with diabetes and hypertension?",
+        category="recommendation",
+        needles=[rec(ADA, "10.4")],
+        split="dev",
+    ),
+    EvalQuestion(
+        id="ada_2",
+        question="My patient with diabetes has a confirmed blood pressure of 155/95 -- should I start one drug or two?",
+        category="recommendation",
+        needles=[
+            any_of(
+                rec(ADA, "10.7"),
+                figure(ADA, "Figure 10.2 -Recommendations for the treatment of confirmed hypertension"),
+            )
+        ],
+        split="heldout",
+        phrasing="lay",
+        notes="Figure 10.2's flowchart carries the same >=150/90 two-drug branch.",
+    ),
+    EvalQuestion(
+        id="ada_3",
+        question="How often should people with type 2 diabetes be screened for kidney disease?",
+        category="recommendation",
+        needles=[rec(ADA, "11.1a")],
+        split="heldout",
+    ),
+    EvalQuestion(
+        id="ada_4",
+        question="Which glucose-lowering drug class is preferred in type 2 diabetes with an eGFR below 30?",
+        category="recommendation",
+        needles=[rec(ADA, "9.11")],
+        split="dev",
+    ),
+    EvalQuestion(
+        id="ada_5",
+        question="Should a 55-year-old with diabetes and no heart disease be on a statin?",
+        category="recommendation",
+        needles=[rec(ADA, "10.18")],
+        split="dev",
+        phrasing="lay",
+    ),
+    EvalQuestion(
+        id="ada_6",
+        question=(
+            "Should I start an ACE inhibitor to protect the kidneys of someone with diabetes whose "
+            "blood pressure and urine albumin are normal?"
+        ),
+        category="recommendation",
+        needles=[rec(ADA, "11.6c")],
+        split="dev",
+        phrasing="lay",
+    ),
+    EvalQuestion(
+        id="ada_7",
+        question="When can an SGLT2 inhibitor and finerenone be started at the same time?",
+        category="recommendation",
+        needles=[rec(ADA, "11.9")],
+        split="heldout",
+    ),
+    EvalQuestion(
+        id="ada_8",
+        question="Which statin doses count as high-intensity statin therapy?",
+        category="table",
+        needles=[table(ADA, "Table 10.1-High-intensity and moderate-intensity statin therapy")],
+        split="dev",
+    ),
+    EvalQuestion(
+        id="ada_9",
+        question="What protein intake is recommended for people with diabetes on dialysis?",
+        category="recommendation",
+        needles=[rec(ADA, "11.3")],
+        split="dev",
+    ),
+    EvalQuestion(
+        id="ada_10",
+        question=(
+            "In type 2 diabetes with obesity and heart failure with preserved ejection fraction, "
+            "what should the treatment plan include?"
+        ),
+        category="recommendation",
+        needles=[any_of(rec(ADA, "9.9a"), rec(ADA, "10.44d"))],
+        split="dev",
+        notes="ADA states this in both Section 9 (glycemic) and Section 10 (heart failure).",
+    ),
     # ------------------------------------------------- cross-guideline
     EvalQuestion(
         id="aki_ckd_1",
@@ -599,6 +689,43 @@ EVAL_QUESTIONS: list[EvalQuestion] = [
             "Glomerular Ch 1 general BP principles apply by reference; PP 1.5.2 (SBP <120) exists "
             "only inside Figure 8. Under greedy packing it also pulled CKD Rec 3.4.1."
         ),
+    ),
+    EvalQuestion(
+        id="ada_kdigo_1",
+        question="How do the ADA and KDIGO blood pressure targets differ for people with diabetes and CKD?",
+        category="synthesis",
+        needles=[rec(ADA, "11.5"), rec(BP, "3.1.1")],
+        split="dev",
+        notes=(
+            "A real disagreement: ADA <130/80 (SBP <120 encouraged), KDIGO SBP <120 when "
+            "tolerated. A good answer states both, attributed -- not a blend."
+        ),
+    ),
+    EvalQuestion(
+        id="ada_kdigo_2",
+        question="Do ADA and KDIGO agree on using finerenone in type 2 diabetes with CKD and albuminuria?",
+        category="synthesis",
+        needles=[any_of(rec(ADA, "11.8"), rec(ADA, "10.42")), rec(CKD, "3.8.1")],
+        split="heldout",
+        notes="Agree on the drug; eGFR thresholds differ in wording (ADA >=25, KDIGO >25).",
+    ),
+    EvalQuestion(
+        id="ada_kdigo_3",
+        question=(
+            "What eGFR threshold do ADA and KDIGO give for starting an SGLT2 inhibitor in type 2 "
+            "diabetes with CKD, and can it be continued below that?"
+        ),
+        category="synthesis",
+        needles=[rec(ADA, "11.7a"), rec(CKD, "3.7.1"), pp(CKD, "3.7.1")],
+        split="dev",
+    ),
+    EvalQuestion(
+        id="ada_kdigo_4",
+        question="How much dietary protein should someone with diabetes and CKD stage G3 or worse eat?",
+        category="synthesis",
+        needles=[rec(ADA, "11.3"), rec(CKD, "3.3.1.1")],
+        split="dev",
+        notes="Both say 0.8 g/kg/day; a test that agreement is stated only where both say it.",
     ),
     # ------------------------------------------------------ out of scope
     EvalQuestion(
@@ -664,5 +791,23 @@ EVAL_QUESTIONS: list[EvalQuestion] = [
         split="dev",
         scope="near",
         notes="Imaging is 13-17% of real e-consults but outside KDIGO's scope (no simple-cyst/Bosniak content).",
+    ),
+    EvalQuestion(
+        id="oos_8",
+        question="What A1C level is diagnostic of diabetes?",
+        category="out_of_scope",
+        needles=[],
+        split="dev",
+        scope="near",
+        notes="ADA Section 2 (diagnosis) isn't indexed -- only Sections 9-11 + methodology.",
+    ),
+    EvalQuestion(
+        id="oos_9",
+        question="How often should people with diabetes have a dilated eye examination?",
+        category="out_of_scope",
+        needles=[],
+        split="heldout",
+        scope="near",
+        notes="ADA Section 12 (retinopathy) isn't indexed; Section 9 mentions eye exams only as a GLP-1 RA safety note.",
     ),
 ]

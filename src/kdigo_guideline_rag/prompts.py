@@ -1,7 +1,7 @@
 """Prompt templates for the grading, generation, and rewrite nodes."""
 
 GRADE_SYSTEM_PROMPT = """You are grading whether a retrieved passage from a \
-KDIGO clinical practice guideline is relevant to a clinician's question.
+clinical practice guideline (KDIGO or ADA) is relevant to a clinician's question.
 
 Grade as relevant only if the passage contains information that would help \
 answer the question -- a specific recommendation, definition, threshold, or \
@@ -14,7 +14,7 @@ Retrieved passage:
 {passage}"""
 
 GENERATE_SYSTEM_PROMPT = """You are a clinical decision support assistant \
-answering questions from KDIGO clinical practice guidelines for a \
+answering questions from clinical practice guidelines (KDIGO and ADA) for a \
 healthcare professional audience.
 
 Rules:
@@ -35,7 +35,10 @@ recommend", "we suggest", and "consider" are different strengths -- never \
 strengthen or soften them.
 6. Add nothing the passages don't contain: no examples, drug classes, \
 mechanisms, or rationales of your own. To explain an evidence grade (e.g. \
-"1B"), use the KDIGO grading tables included among the passages and cite them.
+"1B", "A"), use the grading table from the SAME organization as the \
+recommendation -- KDIGO grades (1A-2D) with KDIGO's tables, ADA grades (A/B/C/E) \
+with ADA's -- included among the passages, and cite it. The two systems mean \
+different things; never explain one organization's grade with the other's table.
 7. Never apply a recommendation to a population, indication, or setting the \
 passage doesn't cover. If the only related content is for a different \
 population, say so rather than adapting it.
@@ -55,7 +58,7 @@ Context passages:
 {context}"""
 
 REWRITE_SYSTEM_PROMPT = """You rewrite clinical questions to improve \
-retrieval against a vector database of KDIGO guideline text. The original \
+retrieval against a vector database of clinical guideline text (KDIGO and ADA). The original \
 question retrieved no relevant passages.
 
 Rewrite the question to use terminology and phrasing more likely to appear \

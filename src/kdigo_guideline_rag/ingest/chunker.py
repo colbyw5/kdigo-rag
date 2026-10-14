@@ -131,6 +131,13 @@ def _strip_noise(text: str, source: GuidelineSource) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _strip_table_noise(table_md: str, source: GuidelineSource) -> str:
+    """Noise removal for table markdown: same patterns, but rows (newlines) kept."""
+    for pattern in source.noise_patterns:
+        table_md = pattern.sub("", table_md)
+    return table_md.strip()
+
+
 def _split_narrative(text: str, source: GuidelineSource) -> list[str]:
     words = text.split()
     if len(words) <= source.narrative_chunk_size:
@@ -612,7 +619,7 @@ def _figure_chunks(
     layout order.
     """
     coverage.pictures += 1
-    caption = _fix_chars(item.caption_text(doc) or "", source).strip()
+    caption = _strip_noise(_fix_chars(item.caption_text(doc) or "", source), source)
     body_parts: list[str] = []
     for child, _level in doc.iterate_items(root=item, traverse_pictures=True):
         if child is item:
@@ -715,7 +722,7 @@ def _extract_segments(doc: DoclingDocument, source: GuidelineSource) -> tuple[li
         if label == "table":
             if in_references:
                 continue
-            table_md = _fix_chars(item.export_to_markdown(doc), source).strip()
+            table_md = _strip_table_noise(_fix_chars(item.export_to_markdown(doc), source), source)
             if table_md:
                 prov = getattr(item, "prov", None)
                 chunks.append(

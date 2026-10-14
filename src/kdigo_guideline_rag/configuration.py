@@ -10,17 +10,21 @@ GUIDELINE_FILTER_MAP = {
     "aki_only": "KDIGO 2026 AKI/AKD (Public Review Draft)",
     "glomerular_only": "KDIGO 2021 Glomerular Diseases",
     "bp_only": "KDIGO 2021 Blood Pressure in CKD",
+    "ada_only": "ADA Standards of Care in Diabetes 2026",
 }
 
 # Passages always given to the generator alongside retrieved chunks, as
-# (source_guideline, caption prefix) -- verbatim corpus text, so explaining an
-# evidence grade ("1B") is grounded and citable instead of model knowledge.
+# (source_guideline, identifying text near the start of the chunk) -- verbatim
+# corpus text, so explaining an evidence grade ("1B", "A") is grounded and
+# citable instead of model knowledge. Each organization's own table: KDIGO's
+# 1A-2D and ADA's A/B/C/E mean different things.
 # Chosen by reading the extracted text, not just matching captions: the CKD
 # guideline's certainty table (Table 45) extracts with merged cells that read
 # as "B = Low", so the BP guideline's clean copy is used instead.
 REFERENCE_PASSAGES = (
     ("KDIGO 2024 CKD Evaluation and Management", "Table 47| KDIGO nomenclature and description for grading"),
     ("KDIGO 2021 Blood Pressure in CKD", "Table 3| Classification for certainty and quality of the evidence"),
+    ("ADA Standards of Care in Diabetes 2026", "Level of evidence | Description"),
 )
 
 
@@ -33,7 +37,7 @@ class Configuration:
         clinical_focus: Disease area the graph is pointed at.
     """
 
-    guideline_filter: Literal["all", "ckd_only", "aki_only", "glomerular_only", "bp_only"] = "all"
+    guideline_filter: Literal["all", "ckd_only", "aki_only", "glomerular_only", "bp_only", "ada_only"] = "all"
     clinical_focus: str = "kidney"
 
     @classmethod

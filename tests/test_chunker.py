@@ -15,6 +15,7 @@ from kdigo_guideline_rag.ingest.sources import (
     KDIGO_RECOMMENDATION_PATTERN,
     NUMBERED_HEADING_PATTERN,
     GuidelineSource,
+    noise_pattern,
 )
 
 
@@ -206,6 +207,33 @@ def test_noise_pattern_stripped(source):
     chunks = chunk_document(doc, noisy_source)
 
     assert "DRAFT" not in chunks[0].text
+
+
+def test_anchored_noise_pattern_matches_mid_text_lines_and_tables(source):
+    # A download stamp is a line, but it arrives inside multi-line text (a page
+    # break inside a table, or inside a recommendation): ^/$ must match per line.
+    footer_source = GuidelineSource(
+        name="Footer Guideline",
+        pdf_path="unused.pdf",
+        noise_patterns=[noise_pattern(r"^Downloaded from example\.org/.*$")],
+    )
+    table_md = "Downloaded from example.org/x.pdf by guest\n\n| Drug | Dose |\n|---|---|\n| A | 1 mg |"
+    doc = _FakeDoc(
+        [
+            (
+                _item(
+                    "text", "Monitor potassium.\nDownloaded from example.org/x.pdf by guest\nat each visit."
+                ),
+                1,
+            ),
+            (_FakeTable(table_md), 1),
+        ]
+    )
+    chunks = chunk_document(doc, footer_source)
+
+    assert all("Downloaded" not in c.text for c in chunks)
+    table_chunk = next(c for c in chunks if c.label_type == "Table")
+    assert table_chunk.text == "| Drug | Dose |\n|---|---|\n| A | 1 mg |"  # rows kept
 
 
 @pytest.mark.parametrize(

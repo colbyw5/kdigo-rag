@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from kdigo_guideline_rag.configuration import GUIDELINE_FILTER_MAP, REFERENCE_PASSAGES, Configuration
 from kdigo_guideline_rag.ingest.embed import get_vectorstore
+from kdigo_guideline_rag.ingest.text_layer import normalize
 from kdigo_guideline_rag.prompts import (
     CONDENSE_SYSTEM_PROMPT,
     CONDENSE_USER_PROMPT,
@@ -69,7 +70,7 @@ def _cite(doc: Document) -> str:
 
 @lru_cache(maxsize=1)
 def reference_documents() -> tuple[Document, ...]:
-    """Load the always-included reference passages (KDIGO grading tables) from the index.
+    """Load the always-included reference passages (each organization's grading table) from the index.
 
     Raises if any is missing -- a silently absent reference would quietly
     turn grounded grade explanations back into unsupported ones.
@@ -86,7 +87,9 @@ def reference_documents() -> tuple[Document, ...]:
                 # Flagged so clients can show them apart from retrieved passages.
                 Document(page_content=t, metadata={**m, "reference": True})
                 for t, m in zip(found["documents"], found["metadatas"], strict=True)
-                if t.startswith(caption)
+                # Normalized match: captions vary ("Table 47| ..."; ADA's uncaptioned
+                # table) and Docling pads markdown cells with spaces.
+                if normalize(caption) in normalize(t[:400])
             ),
             None,
         )
@@ -158,7 +161,7 @@ def condense(state: GraphState) -> dict:
 
 
 def retrieve(state: GraphState, config: RunnableConfig) -> dict:
-    """Vector search over the KDIGO guideline collection for the current question."""
+    """Vector search over the guideline collection for the current question."""
     cfg = Configuration.from_runnable_config(config)
     vectorstore = get_vectorstore(reset=False)
     filter_ = None

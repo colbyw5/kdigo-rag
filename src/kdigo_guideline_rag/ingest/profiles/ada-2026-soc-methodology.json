@@ -1,0 +1,57 @@
+{
+  "name": "ADA Standards of Care in Diabetes 2026",
+  "pdf_files": [
+    "ADA-2026-SOC-Introduction-Methodology.pdf"
+  ],
+  "profile": {
+    "recommendation_pattern": null,
+    "recommendation_label": "Recommendation",
+    "grade_pattern": "[.)\\]]\\s+([ABCE])(?=\\s|$)",
+    "chapter_pattern": "^[A-Z][A-Z0-9 ,\\-–/()]{6,}$",
+    "ignore_heading_pattern": "(?i)^Recommendations?$",
+    "heading_fallback_pattern": null,
+    "noise_patterns": [
+      "^Downloaded from diabetesjournals\\.org/.*$",
+      "^diabetesjournals\\.org/care\\s*$",
+      "^Diabetes Care Volume \\d+, Supplement \\d+, \\w+ \\d{4}\\s*$",
+      "^(?:Pharmacologic Approaches to Glycemic Treatment|Cardiovascular Disease and Risk Management|Chronic Kidney Disease and Risk Management)\\s*$",
+      "^S\\d{2,3}\\s*$",
+      "^\\d{1,2}\\. [A-Z][A-Z ,\\-–]+$"
+    ],
+    "char_replacements": {},
+    "text_substitutions": [],
+    "recommendation_extractor": "docling",
+    "reference_heading_pattern": "(?i)^(?:\\d+(?:\\.\\d+)*\\.?\\s+)?(references?|bibliography|works\\s+cited|literature\\s+cited|reference\\s+list)\\s*:?\\s*$",
+    "repair_split_ligatures": true,
+    "repair_missing_spaces": true
+  },
+  "decided_by": {
+    "method": "manual (derived from the ADA sections profile)",
+    "review": "Methodology section carries no recommendations; indexed for ADA's evidence-grading table (the reference passage for explaining A/B/C/E grades).",
+    "scorecard": {
+      "passed": true,
+      "problems": 0.0,
+      "per_pdf": [
+        {
+          "pdf": "ADA-2026-SOC-Introduction-Methodology.pdf",
+          "passed": true,
+          "problems": 0.0,
+          "recommendations": 0,
+          "text_layer_recommendations": 0,
+          "missing_vs_text_layer": [],
+          "numbering_gaps": [],
+          "unconfirmed_gaps": [],
+          "truncated": [],
+          "not_verbatim": [],
+          "artifacts": {},
+          "glyph_suspects": {},
+          "tiny_fragments": 0,
+          "examples": {}
+        }
+      ]
+    },
+    "revisions": [
+      "2026-10-13: removed noise pattern '^Figure \\d+\\.\\d+\\s*[-—–].*$' -- a figure caption is content, not page furniture. Once noise patterns became line-anchored (re.MULTILINE) and applied to captions and tables, it deleted every ADA figure caption (9.1, 10.1, 10.2, 10.4, 11.1)."
+    ]
+  }
+}

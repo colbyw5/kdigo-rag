@@ -29,15 +29,25 @@ from kdigo_guideline_rag.eval.runner import RUNS_DIR
 JUDGE_MODEL = "claude-opus-5-5"
 
 # Most specific first: "Blood Pressure in CKD" also contains "CKD".
-GUIDELINE_KEYS = (("blood pressure", "BP"), ("glomerular", "GLOM"), ("aki", "AKI"), ("ckd", "CKD"))
+# Most specific first: an ADA citation can mention "Chronic Kidney Disease"; a
+# KDIGO BP one contains "CKD". Matched as whole words.
+GUIDELINE_KEYS = (
+    (r"\bada\b|standards of care", "ADA"),
+    (r"blood pressure", "BP"),
+    (r"glomerular", "GLOM"),
+    (r"\baki\b", "AKI"),
+    (r"\bckd\b", "CKD"),
+)
 LABEL_ALIASES = {
     "recommendation": "Recommendation",
     "rec": "Recommendation",
     "practice point": "Practice Point",
     "pp": "Practice Point",
 }
-CITATION_BLOCK = re.compile(r"\[([^\[\]]*KDIGO[^\[\]]*)\]")
-NUMBERED_REF = re.compile(r"\b(Recommendation|Rec|Practice Point|PP)\.?\s*(\d+(?:\.\d+)+)", re.IGNORECASE)
+CITATION_BLOCK = re.compile(r"\[([^\[\]]*(?:KDIGO|ADA|Standards of Care)[^\[\]]*)\]")
+NUMBERED_REF = re.compile(
+    r"\b(Recommendation|Rec|Practice Point|PP)\.?\s*(\d+(?:\.\d+)+[a-z]?)", re.IGNORECASE
+)
 FIGURE_REF = re.compile(r"\b(Figure|Fig|Table)\.?\s*(\d+)\b", re.IGNORECASE)
 
 ASKS_FOR_CONTEXT = re.compile(
@@ -55,7 +65,7 @@ OFFERS_OUTSIDE_KNOWLEDGE = re.compile(
 
 def _guideline_key(text: str) -> str | None:
     lowered = text.lower()
-    return next((key for needle, key in GUIDELINE_KEYS if needle in lowered), None)
+    return next((key for pattern, key in GUIDELINE_KEYS if re.search(pattern, lowered)), None)
 
 
 @dataclass
@@ -152,7 +162,7 @@ class AnswerVerdict(BaseModel):
 
 
 JUDGE_SYSTEM = """You evaluate answers from a retrieval-augmented assistant that answers clinicians' \
-questions using only passages retrieved from KDIGO clinical practice guidelines.
+questions using only passages retrieved from clinical practice guidelines (KDIGO and ADA).
 
 Judge only whether the answer is supported by the passages shown -- not whether it is medically true \
 by your own knowledge. A claim the passages don't state is unsupported even if you believe it is correct. \
