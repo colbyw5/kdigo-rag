@@ -14,7 +14,7 @@ from ui_helpers import GUIDELINE_FILTERS, interpreted_as, pipeline_summary, sour
 API_URL = os.environ.get("LANGGRAPH_API_URL", "http://127.0.0.1:2024")
 ASSISTANT_ID = "ckd_guideline_rag"
 
-st.set_page_config(page_title="Kidney Guideline Assistant", page_icon="🩺", layout="centered")
+st.set_page_config(page_title="Kidney Guideline Explorer", page_icon="🩺", layout="centered")
 
 
 @st.cache_resource
@@ -46,7 +46,7 @@ def render_turn(turn: dict, show_debug: bool) -> None:
                     st.markdown(f"**{s.label}**{page}")
                     st.text(s.text[:1500] + ("…" if len(s.text) > 1500 else ""))
         if references:
-            with st.expander("Reference: grading tables (always provided)"):
+            with st.expander("What the evidence grades mean"):
                 for s in references:
                     st.markdown(f"**{s.label}**")
                     st.text(s.text)
@@ -59,20 +59,24 @@ with st.sidebar:
     st.header("Settings")
     filter_label = st.selectbox("Search", list(GUIDELINE_FILTERS), index=0)
     user_id = st.text_input(
-        "User ID", value="demo-user", help="Scopes what the assistant remembers about you."
+        "User ID",
+        value="demo-user",
+        help="The assistant remembers your background and interests under this ID.",
     )
     show_debug = st.toggle("Show pipeline details", value=False)
     if st.button("New conversation", use_container_width=True):
         new_conversation()
     st.divider()
     st.caption(
-        "Answers come only from the indexed guidelines -- KDIGO (CKD 2024, AKI/AKD 2026 draft, "
-        "Glomerular 2021, BP in CKD 2021) and ADA Standards of Care 2026 (sections 9-11) -- and cite their sources. Follow-ups use the conversation "
-        "for context; each answer is still built only from passages retrieved for it. Not medical advice."
+        "A study aid for learning what the guidelines recommend: KDIGO (CKD 2024, AKI/AKD 2026 draft, "
+        "Glomerular 2021, BP in CKD 2021) and the ADA Standards of Care 2026 (sections 9-11). "
+        "Answers come only from the guideline text and cite their sources. "
+        "Not medical advice, and not for decisions about individual patients."
     )
     st.caption(f"Server: `{API_URL}`")
 
-st.title("Kidney Guideline Assistant")
+st.title("Kidney Guideline Explorer")
+st.caption("Learn what the KDIGO and ADA guidelines recommend, with every claim cited.")
 
 try:
     if "thread_id" not in st.session_state:
@@ -84,8 +88,10 @@ except Exception as e:  # noqa: BLE001 -- surface any connection problem in the 
 for turn in st.session_state.turns:
     render_turn(turn, show_debug)
 
-if question := st.chat_input("Ask about CKD, AKI, glomerular disease, or BP in CKD…"):
-    with st.spinner("Retrieving, grading, and answering…"):
+if question := st.chat_input(
+    "Ask what the guidelines say about CKD, AKI, glomerular disease, blood pressure or diabetes…"
+):
+    with st.spinner("Searching the guidelines…"):
         try:
             state = client().runs.wait(
                 st.session_state.thread_id,
