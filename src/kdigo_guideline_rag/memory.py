@@ -1,6 +1,6 @@
 """TrustCall extractor for user-context memory.
 
-Remembers facts about the *user* -- their clinical role, expertise level,
+Remembers facts about the *user* -- their background, expertise level,
 recurring topics of interest -- so the assistant can calibrate explanation
 depth across a conversation without being told again. Deliberately does not
 store facts about any specific patient (see DECISIONS.md): this is a
@@ -25,12 +25,12 @@ NAMESPACE_PREFIX = "user_context"
 
 
 class UserContext(BaseModel):
-    """A single fact about the user's clinical role or interests."""
+    """A single fact about the user's background or interests."""
 
     content: str = Field(
-        description="A fact about the user's clinical role, expertise level, "
-        "or recurring interests (e.g. 'is a nephrology fellow', 'frequently "
-        "asks about AKI management'). Not a fact about any patient."
+        description="A fact about the user's background, expertise level, "
+        "or recurring interests (e.g. 'is a nephrology fellow', 'is a pharmacy "
+        "student', 'frequently asks about AKI'). Not a fact about any patient."
     )
 
 

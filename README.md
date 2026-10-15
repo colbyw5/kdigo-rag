@@ -24,7 +24,7 @@ It is a learning and portfolio project, not a clinical tool: it isn't meant for 
 | Answers free of material errors (Opus 5.5 judge) | ~0.80 dev, 0.93 held-out |
 | Out-of-scope questions correctly declined | 1.00 |
 
-The answer-quality and decline figures predate ADA; the retrieval figures include it.
+The answer-quality and decline figures predate ADA and the study-aid prompt; the retrieval figures are current.
 
 ## Quickstart
 

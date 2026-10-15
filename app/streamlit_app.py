@@ -14,7 +14,7 @@ from ui_helpers import GUIDELINE_FILTERS, interpreted_as, pipeline_summary, sour
 API_URL = os.environ.get("LANGGRAPH_API_URL", "http://127.0.0.1:2024")
 ASSISTANT_ID = "ckd_guideline_rag"
 
-st.set_page_config(page_title="Kidney Guideline Explorer", page_icon="🩺", layout="centered")
+st.set_page_config(page_title="Kidney & Diabetes Guideline Explorer", page_icon="🩺", layout="centered")
 
 
 @st.cache_resource
@@ -75,7 +75,7 @@ with st.sidebar:
     )
     st.caption(f"Server: `{API_URL}`")
 
-st.title("Kidney Guideline Explorer")
+st.title("Kidney & Diabetes Guideline Explorer")
 st.caption("Learn what the KDIGO and ADA guidelines recommend, with every claim cited.")
 
 try:
