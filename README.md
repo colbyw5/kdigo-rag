@@ -21,10 +21,10 @@ It is a learning and portfolio project, not a clinical tool: it isn't meant for 
 | Retrieval, KDIGO questions (recall@5) | 0.88 |
 | Retrieval, ADA questions (recall@5) | 0.90 |
 | Retrieval, ADA-vs-KDIGO comparisons (recall@5) | 0.33 — [known gap](#known-limitations) |
-| Answers free of material errors (Opus 5.5 judge) | ~0.80 dev, 0.93 held-out |
+| Answers free of material errors (Opus 5.5 judge) | 0.80 dev |
 | Out-of-scope questions correctly declined | 1.00 |
 
-The answer-quality and decline figures predate ADA and the study-aid prompt; the retrieval figures are current.
+All figures are on the current index (KDIGO + ADA) and prompt; answer quality and declines are on the dev split.
 
 ## Quickstart
 
