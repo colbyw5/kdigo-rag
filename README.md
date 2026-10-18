@@ -51,7 +51,7 @@ pixi run eval-judge         # tier 3: Opus 5.5 judges the saved answers
 pixi run eval-conversations # multi-turn context handling
 ```
 
-Model responses are cached, so reruns pay only for what changed; add `--no-cache` for fresh samples. Details: [EVALUATION.md](EVALUATION.md).
+Model responses are cached, so reruns pay only for what changed; add `--no-cache` for fresh samples, and `--batch` to judge at half price. Details: [EVALUATION.md](EVALUATION.md).
 
 ## Architecture
 

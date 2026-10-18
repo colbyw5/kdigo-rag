@@ -88,3 +88,57 @@ def test_judge_calls_fresh_when_caching_is_off() -> None:
     judge_answer(ROW, client)
     assert client.calls == 2
     assert cache.replay_note(0, 2) == "cache: off (--no-cache)"
+
+
+class FakeBatchClient(FakeJudgeClient):
+    """Adds ``messages.batches`` to the fake judge client; refuses the custom ids in ``refuse``."""
+
+    def __init__(self, refuse: frozenset[str] = frozenset()) -> None:
+        super().__init__()
+        self.submitted: list[dict] = []
+        self.refuse = refuse
+        text = self._response.parsed_output.model_dump_json()
+        self._text = text
+        self.messages = SimpleNamespace(
+            batches=SimpleNamespace(create=self._create, retrieve=None, results=self._results)
+        )
+
+    def _create(self, requests: list[dict]) -> SimpleNamespace:
+        self.submitted = requests
+        return SimpleNamespace(id="batch_1", processing_status="ended")
+
+    def _results(self, batch_id: str) -> list[SimpleNamespace]:
+        out = []
+        for r in reversed(self.submitted):  # results arrive in any order
+            refused = r["custom_id"] in self.refuse
+            message = SimpleNamespace(
+                stop_reason="refusal" if refused else "end_turn",
+                content=[] if refused else [SimpleNamespace(type="text", text=self._text)],
+            )
+            out.append(
+                SimpleNamespace(
+                    custom_id=r["custom_id"], result=SimpleNamespace(type="succeeded", message=message)
+                )
+            )
+        return out
+
+
+def test_batch_judging_skips_cached_rows_and_rejudges_refusals_synchronously(
+    store: cache.ResponseStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kdigo_guideline_rag.eval import judge
+
+    rows = [{**ROW, "id": f"q{i}", "answer": ROW["answer"] + f" ({i})"} for i in range(3)]
+    judge_answer(rows[0], FakeJudgeClient())  # rows[0] is now cached
+    client = FakeBatchClient(refuse=frozenset({"row-2"}))
+    monkeypatch.setattr(judge, "_client", lambda: client)
+
+    judged = judge.judge_run_batch(rows)
+
+    assert [r["custom_id"] for r in client.submitted] == ["row-1", "row-2"]
+    params = client.submitted[0]["params"]
+    assert "extra_body" not in params and params["output_config"]["format"]["type"] == "json_schema"
+    assert [j["id"] for j in judged] == ["q0", "q1", "q2"]  # row order, not result order
+    assert [j["cached"] for j in judged] == [True, False, False]
+    assert client.calls == 1  # the refused row was re-judged synchronously
+    assert all(j["verdict"]["materially_faithful"] for j in judged)

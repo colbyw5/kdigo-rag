@@ -71,3 +71,5 @@ Six questions had material errors only on the old prompt and four only on the ne
 **Cost:** a fresh dev run is roughly $2 to answer and $2 to judge (estimated from token counts).
 
 **Caching.** Model responses are cached in `.eval_cache/`, keyed on the full request, so a rerun pays only for calls whose request changed. Change the generate prompt and the grading calls replay while generation and judging run fresh. A replayed call returns the earlier sample, so each run prints how many calls it replayed. Use `--no-cache` to re-measure variation or to confirm a decision.
+
+**Batched judging.** `eval-judge --batch` (also `judge-check --batch`) sends uncached verdicts through the Message Batches API at half price. It usually takes a few minutes instead of under one. Batches don't allow the server-side refusal fallback, so any refused or failed request is re-judged the normal way.

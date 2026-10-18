@@ -192,15 +192,14 @@ def _client():
     return anthropic.Anthropic(max_retries=6, timeout=300)  # high-effort judging can take minutes
 
 
-def judge_answer(row: dict, client=None) -> dict:
-    """Judge one saved run row; returns deterministic checks + LLM verdict as a dict."""
-    client = client or _client()
+def judge_request(row: dict) -> dict:
+    """The judge request for one saved run row (``beta.messages.parse`` keyword arguments)."""
     coverage = (
         "NOT covered by the indexed guidelines -- the correct behavior is to say so."
         if row["category"] == "out_of_scope"
         else "Covered by the indexed guidelines."
     )
-    request = {
+    return {
         "model": JUDGE_MODEL,
         "max_tokens": 4000,
         "betas": ["server-side-fallback-2026-07-01"],
@@ -219,12 +218,55 @@ def judge_answer(row: dict, client=None) -> dict:
             }
         ],
     }
-    verdict, judge_error, cached = _judge_call(client, request)
+
+
+def _cache_key(request: dict) -> str:
+    """Response-cache key: the whole request plus the verdict schema, so a changed rubric,
+    model or answer is a miss. Shared by the synchronous and batched paths."""
+    return cache.ResponseStore.key(
+        json.dumps(request, sort_keys=True), json.dumps(AnswerVerdict.model_json_schema(), sort_keys=True)
+    )
+
+
+def _cached_verdict(request: dict) -> dict | None:
+    store = cache.active_store()
+    hit = store.get(cache.JUDGE_NAMESPACE, _cache_key(request)) if store else None
+    return json.loads(hit) if hit is not None else None
+
+
+def _store_verdict(request: dict, verdict: dict) -> None:
+    if store := cache.active_store():
+        store.put(cache.JUDGE_NAMESPACE, _cache_key(request), json.dumps(verdict))
+
+
+def _judge_call(client, request: dict) -> tuple[dict | None, str | None, bool]:
+    """``(verdict, judge_error, cached)`` for one judge request, via the response cache when enabled.
+
+    Only successful verdicts are stored.
+    """
+    if (verdict := _cached_verdict(request)) is not None:
+        return verdict, None, True
+    response = client.beta.messages.parse(output_format=AnswerVerdict, **request)
+    if response.stop_reason == "refusal" or response.parsed_output is None:
+        return (
+            None,
+            f"stop_reason={response.stop_reason} details={getattr(response, 'stop_details', None)}",
+            False,
+        )
+    verdict = response.parsed_output.model_dump()
+    _store_verdict(request, verdict)
+    return verdict, None, False
+
+
+def _judged_row(row: dict, verdict: dict | None, judge_error: str | None, cached: bool) -> dict:
+    """Combine the LLM verdict with the deterministic checks into one judged row."""
     if verdict is not None:
         claims = verdict["unsupported_claims"] + verdict["transferred_claims"]
-        verdict["faithful"] = not claims
-        verdict["materially_faithful"] = not any(c["material"] for c in claims)
-
+        verdict = {
+            **verdict,
+            "faithful": not claims,
+            "materially_faithful": not any(c["material"] for c in claims),
+        }
     citations = check_citations(row["answer"], [tuple(p) for p in row["cited_passages"]])
     return {
         "id": row["id"],
@@ -240,29 +282,9 @@ def judge_answer(row: dict, client=None) -> dict:
     }
 
 
-def _judge_call(client, request: dict) -> tuple[dict | None, str | None, bool]:
-    """``(verdict, judge_error, cached)`` for one judge request, via the response cache when enabled.
-
-    The key covers the whole request plus the verdict schema, so a changed
-    rubric, model or answer is a miss. Only successful verdicts are stored.
-    """
-    store = cache.active_store()
-    key = cache.ResponseStore.key(
-        json.dumps(request, sort_keys=True), json.dumps(AnswerVerdict.model_json_schema(), sort_keys=True)
-    )
-    if store and (hit := store.get(cache.JUDGE_NAMESPACE, key)) is not None:
-        return json.loads(hit), None, True
-    response = client.beta.messages.parse(output_format=AnswerVerdict, **request)
-    if response.stop_reason == "refusal" or response.parsed_output is None:
-        return (
-            None,
-            f"stop_reason={response.stop_reason} details={getattr(response, 'stop_details', None)}",
-            False,
-        )
-    verdict = response.parsed_output.model_dump()
-    if store:
-        store.put(cache.JUDGE_NAMESPACE, key, json.dumps(verdict))
-    return verdict, None, False
+def judge_answer(row: dict, client=None) -> dict:
+    """Judge one saved run row; returns deterministic checks + LLM verdict as a dict."""
+    return _judged_row(row, *_judge_call(client or _client(), judge_request(row)))
 
 
 def _judge_isolated(row: dict, client) -> dict:
@@ -295,6 +317,68 @@ def judge_run(rows: list[dict], max_workers: int = 6) -> list[dict]:
     client = _client()
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         return list(pool.map(lambda row: _judge_isolated(row, client), rows))
+
+
+def _batch_params(request: dict) -> dict:
+    """A judge request as Message Batches params: the same model, prompt, effort and verdict
+    schema ``parse`` sends, minus the server-side fallback, which batches reject."""
+    from anthropic import transform_schema
+
+    params = {k: v for k, v in request.items() if k not in ("betas", "extra_body")}
+    params["output_config"] = {
+        **request["output_config"],
+        "format": {"type": "json_schema", "schema": transform_schema(AnswerVerdict)},
+    }
+    return params
+
+
+def judge_run_batch(rows: list[dict], poll_seconds: int = 30) -> list[dict]:
+    """Judge rows through the Message Batches API (half price), preserving row order.
+
+    Cached verdicts are reused without submitting. A batched request that is
+    refused, errors or expires is re-judged synchronously, where the
+    server-side fallback applies -- so the batch path never yields a verdict
+    the synchronous path wouldn't.
+    """
+    import time
+
+    client = _client()
+    requests = [judge_request(row) for row in rows]
+    judged: dict[int, dict] = {}
+    pending = []
+    for i, (row, request) in enumerate(zip(rows, requests, strict=True)):
+        if (verdict := _cached_verdict(request)) is not None:
+            judged[i] = _judged_row(row, verdict, None, True)
+        else:
+            pending.append(i)
+
+    retry: list[int] = []
+    if pending:
+        batch = client.messages.batches.create(
+            requests=[{"custom_id": f"row-{i}", "params": _batch_params(requests[i])} for i in pending]
+        )
+        print(f"batch {batch.id}: {len(pending)} request(s) submitted, {len(rows) - len(pending)} cached")
+        while batch.processing_status != "ended":
+            time.sleep(poll_seconds)
+            batch = client.messages.batches.retrieve(batch.id)
+            counts = batch.request_counts
+            print(f"  {batch.processing_status}: {counts.processing} processing, {counts.succeeded} done")
+        for result in client.messages.batches.results(batch.id):
+            i = int(result.custom_id.removeprefix("row-"))
+            message = result.result.message if result.result.type == "succeeded" else None
+            text = next((b.text for b in message.content if b.type == "text"), None) if message else None
+            if message is None or message.stop_reason == "refusal" or text is None:
+                retry.append(i)
+                continue
+            verdict = AnswerVerdict.model_validate_json(text).model_dump()
+            _store_verdict(requests[i], verdict)
+            judged[i] = _judged_row(rows[i], verdict, None, False)
+        retry += [i for i in pending if i not in judged and i not in retry]  # results never returned
+    if retry:
+        print(f"re-judging {len(retry)} request(s) synchronously (refused, errored or expired in the batch)")
+        for i, j in zip(retry, judge_run([rows[i] for i in retry]), strict=True):
+            judged[i] = j
+    return [judged[i] for i in range(len(rows))]
 
 
 def summarize(judged: list[dict]) -> dict[str, float | int]:
@@ -347,14 +431,14 @@ def latest_run() -> Path:
     return runs[-1]
 
 
-def run_judge(run_path: Path | None = None) -> Path:
+def run_judge(run_path: Path | None = None, batch: bool = False) -> Path:
     """Judge a saved run, print per-question flags and the summary, save ``*-judged.json``."""
     run_path = run_path or latest_run()
     rows = json.loads(run_path.read_text())
     skipped = [r["id"] for r in rows if r.get("error")]
     if skipped:
         print(f"skipping {len(skipped)} question(s) that errored in the pipeline: {skipped}")
-    judged = judge_run([r for r in rows if not r.get("error")])
+    judged = (judge_run_batch if batch else judge_run)([r for r in rows if not r.get("error")])
     for j in judged:
         v = j["verdict"]
         if v is None:
@@ -417,7 +501,9 @@ def _swap_number(answer: str, context: str) -> str | None:
     return None
 
 
-def perturbation_check(judged_path: Path, sample: int = 8, seed: int = 42) -> dict[str, float]:
+def perturbation_check(
+    judged_path: Path, sample: int = 8, seed: int = 42, batch: bool = False
+) -> dict[str, float]:
     """Validate the judge: corrupt answers it rated faithful; it must catch every corruption.
 
     Two corruptions per sampled answer -- a number shared with the passages
@@ -449,7 +535,7 @@ def perturbation_check(judged_path: Path, sample: int = 8, seed: int = 42) -> di
             ("fabricated", {**row, "answer": row["answer"] + "\n\n" + FABRICATED_CLAIM.format(cite=cite)})
         )
 
-    results = judge_run([case for _, case in cases])
+    results = (judge_run_batch if batch else judge_run)([case for _, case in cases])
     print(cache.replay_note(sum(bool(j.get("cached")) for j in results), len(results)))
     detected: dict[str, list[bool]] = {"number": [], "fabricated": []}
     for (kind, case), j in zip(cases, results, strict=True):

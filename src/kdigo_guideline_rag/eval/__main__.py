@@ -4,7 +4,7 @@ Usage:
     python -m kdigo_guideline_rag.eval retrieval [--split dev|heldout|all] [--k 5]
     python -m kdigo_guideline_rag.eval pipeline  [--split dev|heldout|all]
     python -m kdigo_guideline_rag.eval verify      # every needle exists in the index
-    python -m kdigo_guideline_rag.eval judge [--run PATH]   # tier 3 on a saved pipeline run (default: latest)
+    python -m kdigo_guideline_rag.eval judge [--run PATH] [--batch]   # tier 3 on a saved pipeline run (default: latest)
     python -m kdigo_guideline_rag.eval judge-check --run PATH-judged.json   # judge must catch corrupted answers
     python -m kdigo_guideline_rag.eval conversations [--split dev|heldout|all]   # multi-turn final-turn scoring
 
@@ -34,6 +34,11 @@ def main() -> int:
     parser.add_argument("--run", type=Path, default=None, help="judge: saved run file (default: latest)")
     parser.add_argument("--split", choices=["dev", "heldout", "all"], default="dev")
     parser.add_argument("--k", type=int, default=5)
+    parser.add_argument(
+        "--batch",
+        action="store_true",
+        help="judge / judge-check: submit through the Message Batches API (half price, slower)",
+    )
     parser.add_argument(
         "--no-cache",
         action="store_true",
@@ -72,7 +77,7 @@ def main() -> int:
 
         if args.run is None:
             raise SystemExit("judge-check needs --run PATH to a *-judged.json file")
-        print(perturbation_check(args.run))
+        print(perturbation_check(args.run, batch=args.batch))
         return 0
 
     if args.tier == "conversations":
@@ -87,7 +92,7 @@ def main() -> int:
     if args.tier == "judge":
         from kdigo_guideline_rag.eval.judge import run_judge
 
-        run_judge(args.run)
+        run_judge(args.run, batch=args.batch)
         return 0
 
     if args.tier == "retrieval":
