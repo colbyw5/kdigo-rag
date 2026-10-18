@@ -21,10 +21,10 @@ It is a learning and portfolio project, not a clinical tool: it isn't meant for 
 | Retrieval, KDIGO questions (recall@5) | 0.88 |
 | Retrieval, ADA questions (recall@5) | 0.90 |
 | Retrieval, ADA-vs-KDIGO comparisons (recall@5) | 0.33 — [known gap](#known-limitations) |
-| Answers free of material errors (Opus 5.5 judge) | 0.80 dev |
+| Answers free of material errors (Opus 5.5 judge) | 0.80 dev, 0.89 held-out |
 | Out-of-scope questions correctly declined | 1.00 |
 
-All figures are on the current index (KDIGO + ADA) and prompt; answer quality and declines are on the dev split.
+All figures are on the current index (KDIGO + ADA) and prompt. Setup, breakdowns and known gaps: [EVALUATION.md](EVALUATION.md).
 
 ## Quickstart
 
@@ -85,7 +85,7 @@ Local only for now (`pixi run dev` + `pixi run ui`). A `docker compose` deployme
 - **"Not covered" is enforced in code, not in the prompt.** When asked to decline in the prompt, the model still gave ESA and tolvaptan doses from its own knowledge. Now, if no passage survives grading, the model is never called.
 - **Grades are explained only with their own organization's table.** KDIGO's 1B and ADA's B mean different things.
 - **Follow-ups are condensed, but each answer sees only its own passages,** so every claim stays tied to a citation from that turn.
-- **Three-tier eval with corpus-verified gold labels.** Gold evidence is an anchor in the source text (a recommendation number, caption or phrase), so labels survive re-chunking. Retrieval is scored deterministically and used for every index decision. Answers are judged by Opus 5.5, a different model from the Sonnet 5 generator. The judge is checked against planted errors: it caught 8/8 fabricated recommendations and 7/7 altered numbers. A held-out split is used only to confirm decisions.
+- **Three-tier eval with corpus-verified gold labels.** Gold evidence is an anchor in the source text (a recommendation number, caption or phrase), so labels survive re-chunking. Retrieval is scored deterministically and used for every index decision. Answers are judged by Opus 5.5, a different model from the Sonnet 5 generator. The judge is checked against planted errors: it caught 8/8 fabricated recommendations and 6/7 altered numbers ([details](EVALUATION.md#results)). A held-out split is used only to confirm decisions.
 - **Models.** Sonnet 5 grades and generates: it is about 2.5× cheaper than Opus and sufficient for answering from provided passages. Voyage embeddings are Anthropic's recommended partner and fall within the free tier at this corpus size. Chroma runs embedded, which is enough at this scale.
 - **The AKI source is the 2026 public review draft**, for current AKI/AKD scope. Its recommendations may change before final publication.
 
