@@ -17,6 +17,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from kdigo_guideline_rag.eval import cache
 from kdigo_guideline_rag.eval.questions import EvalQuestion
 from kdigo_guideline_rag.eval.retrieval import matches
 from kdigo_guideline_rag.graph import build_local_graph
@@ -41,6 +42,8 @@ class RunResult:
         context: The graded passages exactly as the generate prompt saw them
             (citation headers included) -- what tier 3 judges against.
         cited_passages: ``(citation header, text)`` per graded passage.
+        llm_calls: Chat-model calls this question made (0 when caching is off).
+        llm_replayed: How many of them were replayed from the response cache.
     """
 
     passed: bool | None
@@ -52,6 +55,8 @@ class RunResult:
     context: str = ""
     cited_passages: list[tuple[str, str]] = field(default_factory=list)
     error: str | None = None
+    llm_calls: int = 0
+    llm_replayed: int = 0
 
     @property
     def precision(self) -> float:
@@ -130,8 +135,11 @@ def run_eval(questions: list[EvalQuestion], split: str = "dev") -> bool:
     tier 3, return True iff all in-scope ones passed."""
     results: dict[str, RunResult] = {}
     for q in questions:
+        replayed_before, calls_before = cache.llm_counts()
         try:
             r = results[q.id] = _run_one(q)
+            replayed, calls = cache.llm_counts()
+            r.llm_calls, r.llm_replayed = calls - calls_before, replayed - replayed_before
         except Exception as e:  # noqa: BLE001 -- one failed question must not discard the run
             results[q.id] = RunResult(None, "", [], 0, 0, 0, error=f"{type(e).__name__}: {e}")
             print(f"\n{'=' * 70}\n[{q.id}] ERROR -- {results[q.id].error}")
@@ -171,5 +179,6 @@ def run_eval(questions: list[EvalQuestion], split: str = "dev") -> bool:
     pooled = total_relevant / total_retrieved if total_retrieved else 0.0
     print(f"in-scope grader precision (pooled): {total_relevant}/{total_retrieved} = {pooled:.2f}")
     print(f"questions needing a rewrite: {sum(1 for r in results.values() if r.rewrites)}/{len(results)}")
+    print(cache.replay_note(*cache.llm_counts()))
     print(f"run saved for tier-3 judging: {save_run(questions, results, split)}")
     return len(passed) == len(in_scope)

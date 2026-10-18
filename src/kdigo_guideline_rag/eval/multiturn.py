@@ -10,6 +10,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+from kdigo_guideline_rag.eval import cache
 from kdigo_guideline_rag.eval.conversations import Conversation
 from kdigo_guideline_rag.eval.retrieval import score
 from kdigo_guideline_rag.eval.runner import RUNS_DIR
@@ -35,6 +36,7 @@ def run_conversations(convs: list[Conversation], split: str = "dev") -> Path:
     rows, results = [], []
     for conv in convs:
         config = {"configurable": {"thread_id": f"conv-{conv.id}", "user_id": f"conv-{conv.id}"}}
+        replayed_before, calls_before = cache.llm_counts()
         try:
             for turn in conv.turns:
                 state = graph.invoke({"question": turn}, config=config)
@@ -67,6 +69,8 @@ def run_conversations(convs: list[Conversation], split: str = "dev") -> Path:
                 "context": format_context(docs),
                 "cited_passages": [(_cite(d), d.page_content) for d in docs],
                 "error": None,
+                "llm_calls": cache.llm_counts()[1] - calls_before,
+                "llm_replayed": cache.llm_counts()[0] - replayed_before,
             }
         )
 
@@ -81,6 +85,7 @@ def run_conversations(convs: list[Conversation], split: str = "dev") -> Path:
     if oos:
         print(f"out-of-scope follow-ups declined by the fixed response: {sum(oos)}/{len(oos)}")
 
+    print(cache.replay_note(*cache.llm_counts()))
     RUNS_DIR.mkdir(exist_ok=True)
     path = RUNS_DIR / f"{datetime.now(UTC):%Y%m%d-%H%M%S}-conversations-{split}.json"
     path.write_text(json.dumps(rows, indent=2, ensure_ascii=False))

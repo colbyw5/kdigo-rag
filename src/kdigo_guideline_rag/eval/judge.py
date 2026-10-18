@@ -24,6 +24,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from kdigo_guideline_rag.eval import cache
 from kdigo_guideline_rag.eval.runner import RUNS_DIR
 
 JUDGE_MODEL = "claude-opus-5-5"
@@ -199,15 +200,14 @@ def judge_answer(row: dict, client=None) -> dict:
         if row["category"] == "out_of_scope"
         else "Covered by the indexed guidelines."
     )
-    response = client.beta.messages.parse(
-        model=JUDGE_MODEL,
-        max_tokens=4000,
-        betas=["server-side-fallback-2026-07-01"],
-        extra_body={"fallbacks": "default"},
-        output_config={"effort": "high"},
-        output_format=AnswerVerdict,
-        system=JUDGE_SYSTEM,
-        messages=[
+    request = {
+        "model": JUDGE_MODEL,
+        "max_tokens": 4000,
+        "betas": ["server-side-fallback-2026-07-01"],
+        "extra_body": {"fallbacks": "default"},
+        "output_config": {"effort": "high"},
+        "system": JUDGE_SYSTEM,
+        "messages": [
             {
                 "role": "user",
                 "content": JUDGE_USER.format(
@@ -218,12 +218,9 @@ def judge_answer(row: dict, client=None) -> dict:
                 ),
             }
         ],
-    )
-    if response.stop_reason == "refusal" or response.parsed_output is None:
-        verdict = None
-        judge_error = f"stop_reason={response.stop_reason} details={getattr(response, 'stop_details', None)}"
-    else:
-        verdict, judge_error = response.parsed_output.model_dump(), None
+    }
+    verdict, judge_error, cached = _judge_call(client, request)
+    if verdict is not None:
         claims = verdict["unsupported_claims"] + verdict["transferred_claims"]
         verdict["faithful"] = not claims
         verdict["materially_faithful"] = not any(c["material"] for c in claims)
@@ -239,7 +236,33 @@ def judge_answer(row: dict, client=None) -> dict:
         "regex_offers_outside_knowledge": bool(OFFERS_OUTSIDE_KNOWLEDGE.search(row["answer"])),
         "verdict": verdict,
         "judge_error": judge_error,
+        "cached": cached,
     }
+
+
+def _judge_call(client, request: dict) -> tuple[dict | None, str | None, bool]:
+    """``(verdict, judge_error, cached)`` for one judge request, via the response cache when enabled.
+
+    The key covers the whole request plus the verdict schema, so a changed
+    rubric, model or answer is a miss. Only successful verdicts are stored.
+    """
+    store = cache.active_store()
+    key = cache.ResponseStore.key(
+        json.dumps(request, sort_keys=True), json.dumps(AnswerVerdict.model_json_schema(), sort_keys=True)
+    )
+    if store and (hit := store.get(cache.JUDGE_NAMESPACE, key)) is not None:
+        return json.loads(hit), None, True
+    response = client.beta.messages.parse(output_format=AnswerVerdict, **request)
+    if response.stop_reason == "refusal" or response.parsed_output is None:
+        return (
+            None,
+            f"stop_reason={response.stop_reason} details={getattr(response, 'stop_details', None)}",
+            False,
+        )
+    verdict = response.parsed_output.model_dump()
+    if store:
+        store.put(cache.JUDGE_NAMESPACE, key, json.dumps(verdict))
+    return verdict, None, False
 
 
 def _judge_isolated(row: dict, client) -> dict:
@@ -259,6 +282,7 @@ def _judge_isolated(row: dict, client) -> dict:
             "regex_offers_outside_knowledge": False,
             "verdict": None,
             "judge_error": f"{type(e).__name__}: {e}",
+            "cached": False,
         }
 
 
@@ -356,6 +380,7 @@ def run_judge(run_path: Path | None = None) -> Path:
         for c in j["citations_invalid"]:
             print(f"        ~ invalid citation: {c[:120]}")
     summary = summarize(judged)
+    print("\n" + cache.replay_note(sum(bool(j.get("cached")) for j in judged), len(judged)))
     print(
         "\n"
         + "\n".join(f"{k:30} {v:.2f}" if isinstance(v, float) else f"{k:30} {v}" for k, v in summary.items())
@@ -425,6 +450,7 @@ def perturbation_check(judged_path: Path, sample: int = 8, seed: int = 42) -> di
         )
 
     results = judge_run([case for _, case in cases])
+    print(cache.replay_note(sum(bool(j.get("cached")) for j in results), len(results)))
     detected: dict[str, list[bool]] = {"number": [], "fabricated": []}
     for (kind, case), j in zip(cases, results, strict=True):
         caught = j["verdict"] is not None and not j["verdict"]["faithful"]

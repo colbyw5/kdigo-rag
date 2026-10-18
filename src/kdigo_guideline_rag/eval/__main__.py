@@ -10,6 +10,10 @@ Usage:
 
 Defaults to the dev split: run heldout only to confirm a decision already
 made on dev.
+
+Model responses are cached (``.eval_cache/``), so a rerun pays only for calls
+whose request changed. Pass ``--no-cache`` to re-measure run-to-run variation
+or to confirm a decision with fresh samples.
 """
 
 import argparse
@@ -30,8 +34,17 @@ def main() -> int:
     parser.add_argument("--run", type=Path, default=None, help="judge: saved run file (default: latest)")
     parser.add_argument("--split", choices=["dev", "heldout", "all"], default="dev")
     parser.add_argument("--k", type=int, default=5)
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="call the models fresh instead of replaying cached responses (to re-measure variation)",
+    )
     args = parser.parse_args()
     load_dotenv()
+    if not args.no_cache and args.tier in ("pipeline", "judge", "judge-check", "conversations"):
+        from kdigo_guideline_rag.eval import cache
+
+        cache.enable()
 
     questions = [q for q in EVAL_QUESTIONS if args.split == "all" or q.split == args.split]
 

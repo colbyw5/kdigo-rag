@@ -68,4 +68,6 @@ Every index change is decided on tier 1, which is free and deterministic. Prompt
 
 Six questions had material errors only on the old prompt and four only on the new one, which is within run-to-run variation. That reads as no regression, not an improvement. The prompt was kept for its framing.
 
-**Cost:** a dev run is roughly $2 to answer and $2 to judge (estimated from token counts). Response caching and batched judging are next.
+**Cost:** a fresh dev run is roughly $2 to answer and $2 to judge (estimated from token counts).
+
+**Caching.** Model responses are cached in `.eval_cache/`, keyed on the full request, so a rerun pays only for calls whose request changed. Change the generate prompt and the grading calls replay while generation and judging run fresh. A replayed call returns the earlier sample, so each run prints how many calls it replayed. Use `--no-cache` to re-measure variation or to confirm a decision.

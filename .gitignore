@@ -39,5 +39,8 @@ data/parsed/
 # saved eval runs (tier-3 judge inputs/outputs)
 eval_runs/
 
+# eval response cache (see eval/cache.py)
+.eval_cache/
+
 # langgraph dev local server state
 .langgraph_api/
